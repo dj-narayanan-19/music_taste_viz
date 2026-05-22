@@ -1,0 +1,13 @@
+# Phase 1 — Data pipeline
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Phase 1 — Spotify enrichment (fetch_spotify.py)
+spotipy>=2.23.0
+
+# Phase 2 — Processing
+numpy>=1.26.0
+pandas>=2.1.0
+scikit-learn>=1.3.0
+umap-learn>=0.5.5
+hdbscan>=0.8.33
