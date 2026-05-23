@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mockup C — Search + Multi-filter</title>
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0c0c14;
+      color: #d0d0e8;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      border-bottom: 1px solid #1e1e30;
+      flex-shrink: 0;
+    }
+
+    .topbar h1 { font-size: 0.95rem; font-weight: 600; color: #b0b0d0; white-space: nowrap; }
+
+    .search-wrap {
+      position: relative;
+      flex: 1;
+      max-width: 320px;
+    }
+
+    .search-wrap input {
+      width: 100%;
+      background: #16162a;
+      border: 1px solid #2a2a48;
+      color: #c0c0e0;
+      padding: 6px 10px 6px 30px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      outline: none;
+    }
+
+    .search-wrap input:focus { border-color: #5050aa; }
+
+    .search-wrap::before {
+      content: "⌕";
+      position: absolute;
+      left: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #4a4a7a;
+      font-size: 1rem;
+      pointer-events: none;
+    }
+
+    .filterbar {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 8px 16px;
+      background: #0e0e1c;
+      border-bottom: 1px solid #1a1a2e;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+
+    .filter-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .filter-group label {
+      font-size: 0.68rem;
+      color: #5a5a8a;
+      white-space: nowrap;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    input[type="range"] { accent-color: #6060cc; cursor: pointer; width: 80px; }
+
+    .filter-val { font-size: 0.68rem; color: #6060aa; min-width: 24px; }
+
+    select {
+      background: #16162a;
+      border: 1px solid #2a2a48;
+      color: #b0b0d0;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      cursor: pointer;
+    }
+
+    .clear-btn {
+      margin-left: auto;
+      font-size: 0.72rem;
+      color: #44447a;
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: 2px 6px;
+    }
+
+    .clear-btn:hover { color: #8888cc; }
+
+    .main {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+
+    #plot { flex: 1; min-width: 0; }
+
+    .detail-panel {
+      width: 180px;
+      flex-shrink: 0;
+      border-left: 1px solid #1a1a2e;
+      padding: 14px 12px;
+      overflow-y: auto;
+      background: #0a0a12;
+    }
+
+    .panel-label {
+      font-size: 0.62rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #36366a;
+      margin-bottom: 10px;
+    }
+
+    .panel-empty {
+      font-size: 0.75rem;
+      color: #2a2a4a;
+      line-height: 1.5;
+    }
+
+    .panel-title { font-size: 0.88rem; font-weight: 600; color: #c0c0e0; line-height: 1.3; margin-bottom: 4px; }
+    .panel-artist { font-size: 0.78rem; color: #7070b0; margin-bottom: 10px; }
+    .panel-stat { font-size: 0.72rem; color: #5050a0; margin-bottom: 4px; }
+    .panel-stat span { color: #9090d0; }
+
+    .feat-row { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
+    .feat-name { font-size: 0.63rem; color: #40406a; text-transform: uppercase; letter-spacing: 0.06em; }
+    .feat-bar-wrap { height: 4px; background: #18182e; border-radius: 2px; }
+    .feat-bar { height: 100%; border-radius: 2px; background: #5050cc; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h1>Music Taste Map</h1>
+    <div class="search-wrap">
+      <input type="text" id="search" placeholder="Search tracks or artists…" />
+    </div>
+    <span style="font-size:0.72rem;color:#36366a;margin-left:auto" id="track-count"></span>
+  </div>
+  <div class="filterbar">
+    <div class="filter-group">
+      <label>Artist</label>
+      <select id="artist-filter"><option value="all">All artists</option></select>
+    </div>
+    <div class="filter-group">
+      <label>Min plays</label>
+      <input type="range" id="plays-slider" min="1" value="1" />
+      <span class="filter-val" id="plays-val">1</span>
+    </div>
+    <div class="filter-group">
+      <label>Energy ≥</label>
+      <input type="range" id="energy-slider" min="0" max="100" value="0" />
+      <span class="filter-val" id="energy-val">0</span>
+    </div>
+    <div class="filter-group">
+      <label>Valence ≥</label>
+      <input type="range" id="valence-slider" min="0" max="100" value="0" />
+      <span class="filter-val" id="valence-val">0</span>
+    </div>
+    <button class="clear-btn" id="clear-btn">✕ clear</button>
+  </div>
+  <div class="main">
+    <div id="plot"></div>
+    <div class="detail-panel" id="detail">
+      <div class="panel-label">Selected track</div>
+      <div class="panel-empty">Click any point to pin details here.</div>
+    </div>
+  </div>
+  <script>
+    const DATA_PATH = "../../data/processed/viz_data.json";
+    const TOP_N = 15;
+    const PALETTE = ["#e05c5c","#5cae8a","#d9a03c","#5b9ed6","#cc7ad4",
+                     "#e8845a","#5abccc","#c45c8c","#9dc45c","#7c6fcd",
+                     "#c4b05c","#5cc4a0","#d45c7a","#7ab55c","#8c5ccd"];
+    const OTHER_COLOR = "#252540";
+
+    let allRecords = [], topArtists = [], artistColor = {}, rawDataset = {};
+
+    function scaleSizes(ls) {
+      const mn = Math.min(...ls), mx = Math.max(...ls), r = mx - mn || 1;
+      return ls.map(s => 4 + (s - mn) / r * 20);
+    }
+
+    function hover(r) {
+      return `<b>${r.title}</b><br>${r.artist}<br>${r.play_count.toLocaleString()} plays`;
+    }
+
+    function buildTraces(records) {
+      const groups = {};
+      for (const r of records) {
+        const label = artistColor[r.artist] ? r.artist : "other";
+        (groups[label] = groups[label] || []).push(r);
+      }
+      const traces = [];
+      const other = (groups["other"] || []);
+      if (other.length) traces.push({ type:"scatter", mode:"markers",
+        x:other.map(r=>r.x), y:other.map(r=>r.y), text:other.map(hover),
+        hovertemplate:"%{text}<extra></extra>", showlegend:false,
+        customdata:other.map(r => JSON.stringify(r)),
+        marker:{ color:OTHER_COLOR, size:scaleSizes(other.map(r=>r.log_size)), opacity:0.5, line:{width:0} }
+      });
+      for (const a of topArtists) {
+        const s = groups[a] || [];
+        if (!s.length) continue;
+        traces.push({ type:"scatter", mode:"markers", name:a,
+          x:s.map(r=>r.x), y:s.map(r=>r.y), text:s.map(hover),
+          hovertemplate:"%{text}<extra></extra>", showlegend:false,
+          customdata:s.map(r => JSON.stringify(r)),
+          marker:{ color:artistColor[a], size:scaleSizes(s.map(r=>r.log_size)),
+                   opacity:0.85, line:{width:0.5, color:"rgba(255,255,255,0.1)"} }
+        });
+      }
+      return traces;
+    }
+
+    function render() {
+      const q = document.getElementById("search").value.toLowerCase();
+      const artistF = document.getElementById("artist-filter").value;
+      const minPlays = +document.getElementById("plays-slider").value;
+      const minEnergy = +document.getElementById("energy-slider").value / 100;
+      const minValence = +document.getElementById("valence-slider").value / 100;
+
+      const filtered = allRecords.filter(r => {
+        if (r.play_count < minPlays) return false;
+        if (artistF !== "all" && r.artist !== artistF) return false;
+        if (q && !r.title.toLowerCase().includes(q) && !r.artist.toLowerCase().includes(q)) return false;
+        const raw = rawDataset[`${r.artist}||${r.title}`];
+        if (raw) {
+          if (+raw.energy < minEnergy) return false;
+          if (+raw.valence < minValence) return false;
+        }
+        return true;
+      });
+
+      document.getElementById("track-count").textContent = `${filtered.length.toLocaleString()} tracks`;
+      Plotly.react("plot", buildTraces(filtered), {
+        paper_bgcolor:"#0c0c14", plot_bgcolor:"#0c0c14",
+        font:{color:"#c0c0e0", size:11},
+        xaxis:{showgrid:true,gridcolor:"#14141e",zeroline:false,showticklabels:false},
+        yaxis:{showgrid:true,gridcolor:"#14141e",zeroline:false,showticklabels:false},
+        hovermode:"closest", showlegend:false, margin:{t:8,r:8,b:8,l:8},
+      }, {responsive:true, displayModeBar:false});
+    }
+
+    function showDetail(r) {
+      const raw = rawDataset[`${r.artist}||${r.title}`] || {};
+      const feats = [
+        ["energy", +raw.energy || 0],
+        ["valence", +raw.valence || 0],
+        ["danceability", +raw.danceability || 0],
+        ["acousticness", +raw.acousticness || 0],
+        ["instrumentalness", +raw.instrumentalness || 0],
+      ];
+      const color = artistColor[r.artist] || "#6060cc";
+      document.getElementById("detail").innerHTML = `
+        <div class="panel-label">Selected track</div>
+        <div class="panel-title">${r.title}</div>
+        <div class="panel-artist">${r.artist}</div>
+        <div class="panel-stat">Plays: <span>${r.play_count.toLocaleString()}</span></div>
+        <div class="panel-stat">Cluster: <span>${r.cluster === -1 ? "noise" : r.cluster}</span></div>
+        <div class="feat-row">
+          ${feats.map(([n,v]) => `
+            <div>
+              <div class="feat-name">${n}</div>
+              <div class="feat-bar-wrap"><div class="feat-bar" style="width:${(v*100).toFixed(0)}%;background:${color}"></div></div>
+            </div>`).join("")}
+        </div>`;
+    }
+
+    function init() {
+      const counts = {};
+      for (const r of allRecords) counts[r.artist] = (counts[r.artist]||0)+1;
+      topArtists = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,TOP_N).map(([a])=>a);
+      topArtists.forEach((a,i) => artistColor[a] = PALETTE[i]);
+
+      const sel = document.getElementById("artist-filter");
+      [...topArtists].sort((a,b)=>a.localeCompare(b)).forEach(a => {
+        const o = document.createElement("option"); o.value = a; o.textContent = a; sel.appendChild(o);
+      });
+
+      const slider = document.getElementById("plays-slider");
+      slider.max = Math.ceil(Math.max(...allRecords.map(r=>r.play_count)) / 10) * 10;
+
+      ["plays","energy","valence"].forEach(id => {
+        const el = document.getElementById(`${id}-slider`);
+        el.addEventListener("input", () => {
+          document.getElementById(`${id}-val`).textContent = el.value;
+          render();
+        });
+      });
+
+      document.getElementById("artist-filter").addEventListener("change", render);
+      document.getElementById("search").addEventListener("input", render);
+
+      document.getElementById("clear-btn").addEventListener("click", () => {
+        document.getElementById("search").value = "";
+        document.getElementById("artist-filter").value = "all";
+        ["plays","energy","valence"].forEach(id => {
+          const el = document.getElementById(`${id}-slider`); el.value = el.min;
+          document.getElementById(`${id}-val`).textContent = el.min;
+        });
+        render();
+      });
+
+      document.getElementById("plot").on("plotly_click", data => {
+        const pt = data.points[0];
+        if (pt.customdata) showDetail(JSON.parse(pt.customdata));
+      });
+    }
+
+    Promise.all([
+      fetch(DATA_PATH).then(r=>r.json()),
+      fetch("../../data/processed/dataset.csv").then(r=>r.text()),
+    ]).then(([viz, csv]) => {
+      allRecords = viz;
+      // parse dataset csv for raw features
+      const lines = csv.trim().split("\n");
+      const headers = lines[0].split(",");
+      for (let i = 1; i < lines.length; i++) {
+        const vals = lines[i].split(",");
+        const obj = {};
+        headers.forEach((h,j) => obj[h] = vals[j]);
+        rawDataset[`${obj.artist}||${obj.title}`] = obj;
+      }
+      init(); render();
+    });
+  </script>
+</body>
+</html>

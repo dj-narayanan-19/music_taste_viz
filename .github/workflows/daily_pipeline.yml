@@ -1,0 +1,50 @@
+name: Daily pipeline
+
+on:
+  schedule:
+    - cron: "0 14 * * *"   # 9 AM ET (UTC-5) / 10 AM EDT (UTC-4) — close enough year-round
+  workflow_dispatch:        # allows manual trigger from the GitHub Actions UI
+
+permissions:
+  contents: write           # needed to push the updated caches + viz_data.json back
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repo (with full history so we can push)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write .env from secrets
+        run: |
+          cat > .env << 'EOF'
+          LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}
+          SPOTIFY_CLIENT_ID=${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET=${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SOUNDCHARTS_APP_ID=${{ secrets.SOUNDCHARTS_APP_ID }}
+          SOUNDCHARTS_API_KEY=${{ secrets.SOUNDCHARTS_API_KEY }}
+          EOF
+
+      - name: Run pipeline
+        run: python run_pipeline.py TheRedBaron1999 --min-plays 10 --limit 2000
+
+      - name: Commit updated caches and viz data
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/raw/ data/processed/viz_data.json
+          # Only commit if something actually changed
+          git diff --cached --quiet || git commit -m "chore: daily pipeline update [skip ci]"
+          git push

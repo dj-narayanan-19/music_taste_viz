@@ -1,8 +1,8 @@
 .env
 __pycache__/
 *.pyc
-data/raw/
 data/processed/*
 !data/processed/viz_data.json
 !data/processed/.gitkeep
 .DS_Store
+.cache/

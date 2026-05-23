@@ -28,7 +28,9 @@ STEPS = [
     {
         "label": "Step 2/4  fetch_spotify",
         "script": ROOT / "pipeline" / "fetch_spotify.py",
-        "extra_args": lambda args: (["--features-only"] if args.features_only else []),
+        "extra_args": lambda args: (
+            ["--features-only"] if args.features_only else []
+        ) + ["--limit", str(args.limit)],
     },
     {
         "label": "Step 3/4  build_dataset",
@@ -62,12 +64,16 @@ def main() -> None:
     )
     parser.add_argument("username", help="Last.fm username")
     parser.add_argument(
-        "--min-plays", type=int, default=5, metavar="N",
-        help="Minimum play count to include a track (default: 5)",
+        "--min-plays", type=int, default=10, metavar="N",
+        help="Minimum play count to include a track (default: 10)",
     )
     parser.add_argument(
         "--features-only", action="store_true",
         help="Skip Spotify ID search in fetch_spotify; use cached IDs only",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=1000, metavar="N",
+        help="Max tracks to process for Soundcharts features per run (default: 1000)",
     )
     args = parser.parse_args()
 

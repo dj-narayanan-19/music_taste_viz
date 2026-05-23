@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mockup D — Full Bleed</title>
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #07070e;
+      color: #c0c0d8;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      height: 100dvh;
+      overflow: hidden;
+      position: relative;
+    }
+
+    #plot {
+      position: absolute;
+      inset: 0;
+    }
+
+    /* floating title — top left */
+    .title-chip {
+      position: absolute;
+      top: 16px;
+      left: 20px;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .title-chip h1 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: rgba(180,180,220,0.7);
+      letter-spacing: 0.06em;
+    }
+
+    .title-chip p {
+      font-size: 0.65rem;
+      color: rgba(100,100,150,0.6);
+      margin-top: 2px;
+    }
+
+    /* bottom control strip */
+    .controls {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 10;
+      padding: 12px 20px 16px;
+      background: linear-gradient(transparent, rgba(7,7,14,0.92) 40%);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 20px;
+      font-size: 0.73rem;
+      cursor: pointer;
+      user-select: none;
+      border: 1px solid transparent;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+
+    .chip.active {
+      border-color: rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.07);
+      color: #d0d0f0;
+    }
+
+    .chip.inactive {
+      border-color: rgba(255,255,255,0.05);
+      background: rgba(255,255,255,0.02);
+      color: rgba(150,150,180,0.4);
+    }
+
+    .chip-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .settings-btn {
+      margin-left: auto;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      color: rgba(140,140,180,0.5);
+      border-radius: 20px;
+      padding: 5px 12px;
+      font-size: 0.73rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s;
+    }
+
+    .settings-btn:hover {
+      background: rgba(255,255,255,0.08);
+      color: rgba(180,180,220,0.8);
+    }
+
+    /* settings drawer */
+    .drawer {
+      position: absolute;
+      bottom: 60px;
+      right: 20px;
+      z-index: 20;
+      background: rgba(12,12,22,0.95);
+      border: 1px solid #252540;
+      border-radius: 10px;
+      padding: 14px 16px;
+      display: none;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 200px;
+      backdrop-filter: blur(12px);
+    }
+
+    .drawer.open { display: flex; }
+
+    .drawer-row {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .drawer-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.68rem;
+      color: #5a5a8a;
+    }
+
+    input[type="range"] { accent-color: #7070cc; cursor: pointer; width: 100%; }
+
+    #track-count {
+      font-size: 0.65rem;
+      color: rgba(80,80,120,0.7);
+      margin-left: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div id="plot"></div>
+
+  <div class="title-chip">
+    <h1>Music Taste Map</h1>
+    <p id="track-count">loading…</p>
+  </div>
+
+  <div class="controls">
+    <div id="chip-strip"></div>
+    <button class="settings-btn" id="settings-btn">⚙ filters</button>
+  </div>
+
+  <div class="drawer" id="drawer">
+    <div class="drawer-row">
+      <div class="drawer-label"><span>Min plays</span><span id="plays-val">1</span></div>
+      <input type="range" id="plays-slider" min="1" value="1" />
+    </div>
+  </div>
+
+  <script>
+    const DATA_PATH = "../../data/processed/viz_data.json";
+    const TOP_N = 12;
+    const PALETTE = ["#e05c5c","#5cae8a","#d9a03c","#5b9ed6","#cc7ad4",
+                     "#e8845a","#5abccc","#c45c8c","#9dc45c","#7c6fcd",
+                     "#c4b05c","#5cc4a0"];
+    const OTHER_COLOR = "#1c1c30";
+
+    let allRecords = [], topArtists = [], artistColor = {}, muted = new Set();
+
+    function scaleSizes(ls) {
+      const mn = Math.min(...ls), mx = Math.max(...ls), r = mx - mn || 1;
+      return ls.map(s => 5 + (s - mn) / r * 22);
+    }
+
+    function hover(r) {
+      return `<b>${r.title}</b><br>${r.artist}<br>${r.play_count.toLocaleString()} plays`;
+    }
+
+    function buildTraces(records) {
+      const groups = {};
+      for (const r of records) {
+        const label = artistColor[r.artist] ? r.artist : "other";
+        (groups[label] = groups[label] || []).push(r);
+      }
+      const traces = [];
+      const other = groups["other"] || [];
+      if (other.length) traces.push({
+        type:"scatter", mode:"markers",
+        x:other.map(r=>r.x), y:other.map(r=>r.y), text:other.map(hover),
+        hovertemplate:"%{text}<extra></extra>", showlegend:false,
+        marker:{ color:OTHER_COLOR, size:scaleSizes(other.map(r=>r.log_size)), opacity:0.45, line:{width:0} }
+      });
+      for (const a of topArtists) {
+        if (muted.has(a)) continue;
+        const s = groups[a] || [];
+        if (!s.length) continue;
+        traces.push({ type:"scatter", mode:"markers", name:a,
+          x:s.map(r=>r.x), y:s.map(r=>r.y), text:s.map(hover),
+          hovertemplate:"%{text}<extra></extra>", showlegend:false,
+          marker:{ color:artistColor[a], size:scaleSizes(s.map(r=>r.log_size)),
+                   opacity:0.9, line:{width:0.5, color:"rgba(255,255,255,0.12)"} }
+        });
+      }
+      return traces;
+    }
+
+    function render() {
+      const minPlays = +document.getElementById("plays-slider").value;
+      const filtered = allRecords.filter(r => r.play_count >= minPlays);
+      const visible = filtered.filter(r => !muted.has(r.artist));
+      document.getElementById("track-count").textContent =
+        `${visible.length.toLocaleString()} of ${allRecords.length.toLocaleString()} tracks`;
+      Plotly.react("plot", buildTraces(filtered), {
+        paper_bgcolor:"#07070e", plot_bgcolor:"#07070e",
+        font:{color:"#c0c0d8"},
+        xaxis:{showgrid:false,zeroline:false,showticklabels:false},
+        yaxis:{showgrid:false,zeroline:false,showticklabels:false},
+        hovermode:"closest", showlegend:false,
+        margin:{t:0,r:0,b:0,l:0},
+      }, {responsive:true, displayModeBar:false});
+    }
+
+    function buildChips() {
+      const strip = document.getElementById("chip-strip");
+      strip.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;align-items:center";
+
+      topArtists.forEach(a => {
+        const chip = document.createElement("div");
+        chip.className = "chip active";
+        chip.innerHTML = `<div class="chip-dot" style="background:${artistColor[a]}"></div>${a}`;
+        chip.addEventListener("click", () => {
+          if (muted.has(a)) {
+            muted.delete(a); chip.className = "chip active";
+          } else {
+            muted.add(a); chip.className = "chip inactive";
+          }
+          render();
+        });
+        strip.appendChild(chip);
+      });
+    }
+
+    // Settings drawer toggle
+    document.getElementById("settings-btn").addEventListener("click", e => {
+      e.stopPropagation();
+      document.getElementById("drawer").classList.toggle("open");
+    });
+    document.addEventListener("click", () => document.getElementById("drawer").classList.remove("open"));
+    document.getElementById("drawer").addEventListener("click", e => e.stopPropagation());
+
+    const slider = document.getElementById("plays-slider");
+    slider.addEventListener("input", function() {
+      document.getElementById("plays-val").textContent = this.value;
+      render();
+    });
+
+    fetch(DATA_PATH).then(r=>r.json()).then(data => {
+      allRecords = data;
+      const counts = {};
+      for (const r of allRecords) counts[r.artist] = (counts[r.artist]||0)+1;
+      topArtists = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,TOP_N).map(([a])=>a);
+      topArtists.forEach((a,i) => artistColor[a] = PALETTE[i]);
+      slider.max = Math.ceil(Math.max(...allRecords.map(r=>r.play_count)) / 10) * 10;
+      buildChips();
+      render();
+    });
+  </script>
+</body>
+</html>

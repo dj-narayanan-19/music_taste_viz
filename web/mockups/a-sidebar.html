@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mockup A — Sidebar</title>
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0b0b0f;
+      color: #d0d0e0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    header {
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid #1a1a28;
+      flex-shrink: 0;
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+    }
+
+    header h1 { font-size: 1rem; font-weight: 600; color: #c0c0d8; letter-spacing: 0.04em; }
+    header span { font-size: 0.72rem; color: #44445a; }
+
+    .body {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+
+    aside {
+      width: 190px;
+      flex-shrink: 0;
+      border-right: 1px solid #1a1a28;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 14px 12px;
+      gap: 20px;
+    }
+
+    .section-label {
+      font-size: 0.65rem;
+      letter-spacing: 0.1em;
+      color: #44445a;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    .artist-list { display: flex; flex-direction: column; gap: 5px; }
+
+    .artist-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      cursor: pointer;
+      padding: 3px 4px;
+      border-radius: 4px;
+      transition: background 0.12s;
+      user-select: none;
+    }
+
+    .artist-row:hover { background: #18182a; }
+    .artist-row.muted { opacity: 0.3; }
+
+    .dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .artist-name {
+      font-size: 0.75rem;
+      color: #a0a0c0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .artist-count {
+      margin-left: auto;
+      font-size: 0.68rem;
+      color: #36364a;
+    }
+
+    .filter-section { display: flex; flex-direction: column; gap: 10px; }
+
+    .filter-row { display: flex; flex-direction: column; gap: 5px; }
+
+    .filter-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.7rem;
+      color: #66668a;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: #7070cc;
+      cursor: pointer;
+    }
+
+    #plot { flex: 1; min-width: 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Music Taste Map</h1>
+    <span id="track-count"></span>
+  </header>
+  <div class="body">
+    <aside>
+      <div>
+        <div class="section-label">Artists</div>
+        <div class="artist-list" id="artist-list"></div>
+      </div>
+      <div class="filter-section">
+        <div class="section-label">Filters</div>
+        <div class="filter-row">
+          <div class="filter-label"><span>Min plays</span><span id="plays-val">1</span></div>
+          <input type="range" id="plays-slider" min="1" value="1" />
+        </div>
+      </div>
+    </aside>
+    <div id="plot"></div>
+  </div>
+  <script>
+    const DATA_PATH = "../../data/processed/viz_data.json";
+    const TOP_N = 15;
+    const PALETTE = ["#e05c5c","#5cae8a","#d9a03c","#5b9ed6","#cc7ad4",
+                     "#e8845a","#5abccc","#c45c8c","#9dc45c","#7c6fcd",
+                     "#c4b05c","#5cc4a0","#d45c7a","#7ab55c","#8c5ccd"];
+    const OTHER_COLOR = "#2a2a44";
+
+    let allRecords = [], topArtists = [], artistColor = {}, muted = new Set();
+
+    function scaleSizes(ls) {
+      const mn = Math.min(...ls), mx = Math.max(...ls), r = mx - mn || 1;
+      return ls.map(s => 4 + (s - mn) / r * 22);
+    }
+
+    function hover(r) {
+      return `<b>${r.title}</b><br>${r.artist}<br>${r.play_count.toLocaleString()} plays`;
+    }
+
+    function buildTraces(records) {
+      const groups = {};
+      for (const r of records) {
+        const label = artistColor[r.artist] ? r.artist : "other";
+        (groups[label] = groups[label] || []).push(r);
+      }
+      const traces = [];
+      for (const a of topArtists) {
+        const s = (groups[a] || []);
+        if (!s.length || muted.has(a)) continue;
+        traces.push({ type:"scatter", mode:"markers", name:a,
+          x:s.map(r=>r.x), y:s.map(r=>r.y),
+          text:s.map(hover), hovertemplate:"%{text}<extra></extra>",
+          marker:{ color:artistColor[a], size:scaleSizes(s.map(r=>r.log_size)),
+                   opacity:0.88, line:{width:0.5, color:"rgba(255,255,255,0.08)"} }
+        });
+      }
+      const other = (groups["other"] || []);
+      if (other.length) {
+        traces.push({ type:"scatter", mode:"markers", name:"other",
+          x:other.map(r=>r.x), y:other.map(r=>r.y),
+          text:other.map(hover), hovertemplate:"%{text}<extra></extra>",
+          showlegend:false,
+          marker:{ color:OTHER_COLOR, size:scaleSizes(other.map(r=>r.log_size)), opacity:0.5, line:{width:0} }
+        });
+      }
+      return traces;
+    }
+
+    function render() {
+      const minPlays = +document.getElementById("plays-slider").value;
+      const filtered = allRecords.filter(r => r.play_count >= minPlays && !muted.has(r.artist));
+      document.getElementById("track-count").textContent = `${filtered.length.toLocaleString()} tracks`;
+      Plotly.react("plot", buildTraces(filtered), {
+        paper_bgcolor:"#0b0b0f", plot_bgcolor:"#0b0b0f",
+        font:{color:"#c0c0d8", size:11},
+        xaxis:{showgrid:true,gridcolor:"#141420",zeroline:false,showticklabels:false},
+        yaxis:{showgrid:true,gridcolor:"#141420",zeroline:false,showticklabels:false},
+        hovermode:"closest", showlegend:false,
+        margin:{t:8,r:8,b:8,l:8},
+      }, {responsive:true, displayModeBar:false});
+    }
+
+    function buildSidebar() {
+      const counts = {};
+      for (const r of allRecords) counts[r.artist] = (counts[r.artist]||0)+1;
+      topArtists = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,TOP_N).map(([a])=>a);
+      topArtists.forEach((a,i) => artistColor[a] = PALETTE[i]);
+
+      const list = document.getElementById("artist-list");
+      list.innerHTML = "";
+      for (const a of topArtists) {
+        const row = document.createElement("div");
+        row.className = "artist-row";
+        row.dataset.artist = a;
+        row.innerHTML = `<div class="dot" style="background:${artistColor[a]}"></div>
+          <span class="artist-name">${a}</span>
+          <span class="artist-count">${counts[a]}</span>`;
+        row.addEventListener("click", () => {
+          if (muted.has(a)) muted.delete(a); else muted.add(a);
+          row.classList.toggle("muted");
+          render();
+        });
+        list.appendChild(row);
+      }
+
+      const slider = document.getElementById("plays-slider");
+      slider.max = Math.ceil(Math.max(...allRecords.map(r=>r.play_count)) / 10) * 10;
+      slider.addEventListener("input", function() {
+        document.getElementById("plays-val").textContent = this.value;
+        render();
+      });
+    }
+
+    fetch(DATA_PATH).then(r=>r.json()).then(data => {
+      allRecords = data;
+      buildSidebar();
+      render();
+    });
+  </script>
+</body>
+</html>
