@@ -4,11 +4,15 @@ Transform the enriched dataset into visualization-ready JSON.
 
 Steps:
   1. Load data/processed/dataset.csv
-  2. Normalize audio features with StandardScaler
-  3. Run UMAP → 2D coordinates (x, y)
-  4. Run HDBSCAN on the original normalized 12D space → cluster labels
-  5. Compute log-scaled bubble size from play count
-  6. Output data/processed/viz_data.json
+  2. Build 11-feature matrix:
+       - Drop `loudness` (r=+0.75 with energy; collinear)
+       - Drop `timeSignature` (92% in 4/4; outliers at 0/1 dominate UMAP)
+       - Replace `key` (linear 0–11) with key_sin/key_cos (circular encoding)
+  3. Normalize with StandardScaler
+  4. Run UMAP → 2D coordinates (x, y)
+  5. Run HDBSCAN on the normalized 11D space → cluster labels
+  6. Compute log-scaled bubble size from play count
+  7. Output data/processed/viz_data.json
 
 The JSON is consumed directly by the web app (no backend required).
 """
@@ -27,10 +31,12 @@ import hdbscan
 
 DATA_PROCESSED_DIR = Path(__file__).parent.parent / "data" / "processed"
 
+# Continuous perceptual features — loudness dropped (collinear with energy),
+# timeSignature dropped (92% in 4/4; outliers at 0/1 dominate UMAP).
+# key handled separately via circular encoding below.
 AUDIO_FEATURE_COLS = [
     "acousticness", "danceability", "energy", "instrumentalness",
-    "key", "liveness", "loudness", "mode",
-    "speechiness", "tempo", "timeSignature", "valence",
+    "liveness", "mode", "speechiness", "tempo", "valence",
 ]
 
 # UMAP defaults — tuned for ~1k–5k points
@@ -39,7 +45,7 @@ UMAP_MIN_DIST = 0.1         # minimum spread of points in 2D
 UMAP_RANDOM_STATE = 42
 
 # HDBSCAN defaults
-HDBSCAN_MIN_CLUSTER_SIZE = 15   # minimum tracks to form a cluster
+HDBSCAN_MIN_CLUSTER_SIZE = 10   # minimum tracks to form a cluster
 HDBSCAN_MIN_SAMPLES = 5         # controls noise sensitivity
 
 
@@ -48,16 +54,24 @@ def load_dataset(path: Path) -> tuple[list[dict], np.ndarray]:
         rows = list(csv.DictReader(f))
     if not rows:
         raise ValueError(f"Dataset is empty: {path}")
-    feature_matrix = np.array(
-        [[float(r[col]) for col in AUDIO_FEATURE_COLS] for r in rows]
-    )
-    return rows, feature_matrix
+
+    feature_matrix = []
+    for r in rows:
+        feats = [float(r[col]) for col in AUDIO_FEATURE_COLS]
+        # Circular encoding for key (0–11): B(11) and C(0) are 1 semitone apart,
+        # but linear encoding treats them as 11 units apart.
+        key = float(r["key"])
+        feats.append(math.sin(2 * math.pi * key / 12))
+        feats.append(math.cos(2 * math.pi * key / 12))
+        feature_matrix.append(feats)
+
+    return rows, np.array(feature_matrix)
 
 
 def normalize(matrix: np.ndarray) -> np.ndarray:
     # StandardScaler: zero mean, unit variance per feature.
-    # Better than MinMax here because loudness (-60–0 dB) and tempo (BPM)
-    # are on very different scales from the 0–1 features.
+    # Tempo (BPM) is on a very different scale from the 0–1 features;
+    # key_sin/key_cos already live in [-1, 1] but benefit from centering.
     return StandardScaler().fit_transform(matrix)
 
 
@@ -86,7 +100,7 @@ def run_hdbscan(
     normalized: np.ndarray,
     min_cluster_size: int = HDBSCAN_MIN_CLUSTER_SIZE,
 ) -> np.ndarray:
-    # Cluster in original 12D normalized space, NOT in 2D UMAP space.
+    # Cluster in original 11D normalized space, NOT in 2D UMAP space.
     # 2D coords are for display only; similarity lives in the full feature space.
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size,

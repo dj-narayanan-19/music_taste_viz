@@ -1,6 +1,8 @@
 const DATA_PATH = "../data/processed/viz_data.json";
 
-// Plotly layout shared between initial render and updates
+// How many top artists (by track count) get a distinct color
+const TOP_N_ARTISTS = 15;
+
 const LAYOUT = {
   paper_bgcolor: "#0e0e12",
   plot_bgcolor: "#0e0e12",
@@ -36,18 +38,13 @@ const CONFIG = {
   displaylogo: false,
 };
 
-// Qualitative palette for clusters; cluster -1 (noise) gets a neutral grey
-const CLUSTER_COLORS = [
-  "#7c6fcd", "#e05c5c", "#5cae8a", "#d9a03c", "#5b9ed6",
-  "#cc7ad4", "#7ab55c", "#d4825b", "#5abccc", "#c45c8c",
-  "#9dc45c", "#5c7acd", "#c4b05c", "#8c5ccd", "#5cc4a0",
+// 15 distinct colors for top artists; "other" gets a muted grey
+const ARTIST_PALETTE = [
+  "#e05c5c", "#5cae8a", "#d9a03c", "#5b9ed6", "#cc7ad4",
+  "#e8845a", "#5abccc", "#c45c8c", "#9dc45c", "#7c6fcd",
+  "#c4b05c", "#5cc4a0", "#d45c7a", "#7ab55c", "#8c5ccd",
 ];
-const NOISE_COLOR = "#3a3a5a";
-
-function clusterColor(id) {
-  if (id === -1) return NOISE_COLOR;
-  return CLUSTER_COLORS[id % CLUSTER_COLORS.length];
-}
+const OTHER_COLOR = "#333350";
 
 // Scale log_size values into Plotly marker pixel sizes
 function scaleSizes(logSizes) {
@@ -57,7 +54,7 @@ function scaleSizes(logSizes) {
   return logSizes.map(s => 4 + ((s - min) / range) * 20);
 }
 
-function buildHoverText(record) {
+function buildHoverText(record, artistLabel) {
   const cluster = record.cluster === -1 ? "noise" : `cluster ${record.cluster}`;
   return (
     `<b>${record.title}</b><br>` +
@@ -67,40 +64,81 @@ function buildHoverText(record) {
   );
 }
 
-let allRecords = [];
-let initialized = false;
-
-function getUniqueClusterIds(records) {
-  return [...new Set(records.map(r => r.cluster))].sort((a, b) => a - b);
+// Rank artists by track count descending, return top-N set
+function topArtistSet(records, n) {
+  const counts = {};
+  for (const r of records) counts[r.artist] = (counts[r.artist] || 0) + 1;
+  return new Set(
+    Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, n)
+      .map(([artist]) => artist)
+  );
 }
 
-function buildTraces(records) {
-  const clusterIds = getUniqueClusterIds(records);
-  return clusterIds.map(cid => {
-    const subset = records.filter(r => r.cluster === cid);
-    const label = cid === -1 ? "noise" : `cluster ${cid}`;
-    return {
+function buildTraces(records, topArtists, artistColorMap) {
+  // Group records by display label (artist name or "other")
+  const groups = {};
+  for (const r of records) {
+    const label = topArtists.has(r.artist) ? r.artist : "other";
+    if (!groups[label]) groups[label] = [];
+    groups[label].push(r);
+  }
+
+  const traces = [];
+
+  // Top artists first (sorted by track count descending for legend order)
+  const sortedArtists = [...topArtists].sort(
+    (a, b) =>
+      (groups[b] || []).length - (groups[a] || []).length
+  );
+
+  for (const artist of sortedArtists) {
+    const subset = groups[artist] || [];
+    if (subset.length === 0) continue;
+    traces.push({
       type: "scatter",
       mode: "markers",
-      name: label,
+      name: artist,
       x: subset.map(r => r.x),
       y: subset.map(r => r.y),
-      text: subset.map(buildHoverText),
+      text: subset.map(r => buildHoverText(r)),
       hovertemplate: "%{text}<extra></extra>",
       marker: {
-        color: clusterColor(cid),
+        color: artistColorMap[artist],
         size: scaleSizes(subset.map(r => r.log_size)),
-        opacity: 0.82,
-        line: { width: 0.5, color: "rgba(255,255,255,0.08)" },
+        opacity: 0.85,
+        line: { width: 0.5, color: "rgba(255,255,255,0.1)" },
       },
-      customdata: subset.map(r => r.play_count),
-    };
-  });
+    });
+  }
+
+  // "other" last so it renders beneath colored points
+  const otherSubset = groups["other"] || [];
+  if (otherSubset.length > 0) {
+    traces.push({
+      type: "scatter",
+      mode: "markers",
+      name: "other",
+      x: otherSubset.map(r => r.x),
+      y: otherSubset.map(r => r.y),
+      text: otherSubset.map(r => buildHoverText(r)),
+      hovertemplate: "%{text}<extra></extra>",
+      marker: {
+        color: OTHER_COLOR,
+        size: scaleSizes(otherSubset.map(r => r.log_size)),
+        opacity: 0.55,
+        line: { width: 0 },
+      },
+    });
+  }
+
+  return traces;
 }
 
-function filterRecords(clusterFilter, minPlays) {
+function filterRecords(artistFilter, minPlays) {
   return allRecords.filter(r => {
-    if (clusterFilter !== "all" && r.cluster !== parseInt(clusterFilter, 10)) return false;
+    if (artistFilter !== "all" && r.artist !== artistFilter) return false;
     if (r.play_count < minPlays) return false;
     return true;
   });
@@ -110,29 +148,33 @@ function updateStats(count) {
   document.getElementById("stats").textContent = `${count.toLocaleString()} tracks`;
 }
 
-function populateClusterDropdown(records) {
-  const select = document.getElementById("cluster-filter");
-  const ids = getUniqueClusterIds(records);
-  ids.forEach(cid => {
-    const opt = document.createElement("option");
-    opt.value = cid;
-    opt.textContent = cid === -1 ? "noise (unclustered)" : `cluster ${cid}`;
-    select.appendChild(opt);
-  });
+function populateArtistDropdown(topArtists) {
+  const select = document.getElementById("artist-filter");
+  [...topArtists]
+    .sort((a, b) => a.localeCompare(b))
+    .forEach(artist => {
+      const opt = document.createElement("option");
+      opt.value = artist;
+      opt.textContent = artist;
+      select.appendChild(opt);
+    });
 }
 
 function setPlaysSliderMax(records) {
   const max = Math.max(...records.map(r => r.play_count));
-  const slider = document.getElementById("plays-filter");
-  // Snap to a readable ceiling
-  slider.max = Math.ceil(max / 10) * 10;
+  document.getElementById("plays-filter").max = Math.ceil(max / 10) * 10;
 }
 
+let allRecords = [];
+let topArtists = new Set();
+let artistColorMap = {};
+let initialized = false;
+
 function render() {
-  const clusterFilter = document.getElementById("cluster-filter").value;
+  const artistFilter = document.getElementById("artist-filter").value;
   const minPlays = parseInt(document.getElementById("plays-filter").value, 10);
-  const filtered = filterRecords(clusterFilter, minPlays);
-  const traces = buildTraces(filtered);
+  const filtered = filterRecords(artistFilter, minPlays);
+  const traces = buildTraces(filtered, topArtists, artistColorMap);
   updateStats(filtered.length);
 
   if (!initialized) {
@@ -143,15 +185,13 @@ function render() {
   }
 }
 
-// Wire up controls
-document.getElementById("cluster-filter").addEventListener("change", render);
+document.getElementById("artist-filter").addEventListener("change", render);
 
 document.getElementById("plays-filter").addEventListener("input", function () {
   document.getElementById("plays-value").textContent = this.value;
   render();
 });
 
-// Load data and bootstrap
 fetch(DATA_PATH)
   .then(res => {
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.url}`);
@@ -159,8 +199,21 @@ fetch(DATA_PATH)
   })
   .then(data => {
     allRecords = data;
+    topArtists = topArtistSet(allRecords, TOP_N_ARTISTS);
+
+    // Assign a stable color to each top artist
+    [...topArtists]
+      .sort((a, b) => {
+        const ca = allRecords.filter(r => r.artist === a).length;
+        const cb = allRecords.filter(r => r.artist === b).length;
+        return cb - ca;
+      })
+      .forEach((artist, i) => {
+        artistColorMap[artist] = ARTIST_PALETTE[i % ARTIST_PALETTE.length];
+      });
+
     document.getElementById("loading").style.display = "none";
-    populateClusterDropdown(allRecords);
+    populateArtistDropdown(topArtists);
     setPlaysSliderMax(allRecords);
     render();
   })
