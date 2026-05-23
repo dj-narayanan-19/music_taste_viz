@@ -1,47 +1,65 @@
 const DATA_PATH = "../data/processed/viz_data.json";
 
-const TOP_N_ARTISTS = 50;
-const X_RANGE = [-2.2, 7.9];
-const Y_RANGE = [1.7, 10.0];
-const OTHER_COLOR   = "#b0aead";
-const OTHER_OPACITY = 0.30;
-
-// One place to change the group-mode label
+const TOP_N_ARTISTS      = 50;
+const OTHER_COLOR        = "#8a8680";
+const OTHER_OPACITY      = 0.55;
+const N_NEIGHBORS        = 15;
 const NEIGHBORHOOD_LABEL = "Neighborhood";
 
+const FEATURE_KEYS   = ["acousticness","danceability","energy","instrumentalness",
+                         "liveness","speechiness","valence","tempo"];
+const FEATURE_LABELS = ["Acousticness","Danceability","Energy","Instrumentalness",
+                         "Liveness","Speechiness","Valence","Tempo"];
+
 const GENRE_PALETTE = [
-  "#2471a3", "#c0392b", "#27ae60",
-  "#7d3c98", "#d35400", "#148f77",
+  "#4dabf7", "#ff6b6b", "#69db7c", "#cc5de8", "#ffa94d", "#38d9a9",
+  "#f783ac", "#a9e34b", "#74c0fc", "#ffd43b", "#e599f7", "#63e6be",
 ];
 
 function makeArtistPalette(n) {
   return Array.from({ length: n }, (_, i) => {
     const h = (i * 137.508) % 360;
-    const s = 55 + (i % 3) * 8;
-    const l = 34 + (i % 2) * 9;
+    const s = 72 + (i % 3) * 8;
+    const l = 58 + (i % 3) * 7;
     return `hsl(${h.toFixed(1)},${s}%,${l}%)`;
   });
 }
 
 const ARTIST_PALETTE = makeArtistPalette(TOP_N_ARTISTS);
 
-// ── State ───────────────────────────────────────────────────────────────────
+// ── State ─────────────────────────────────────────────────────────────────────
 
-let allRecords    = [];
-let colorMode     = "artist";   // "artist" | "genre"
-let selectedGroup = null;
+let allRecords     = [];
+let colorMode      = "artist";
+let selectedGroup  = null;
 let artistColorMap = {};
-let clusterLabels  = {};        // cid → [primaryArtist, second, third]
+let clusterLabels  = {};
+let clusterProfiles = {};
 let globalMinSize, globalMaxSize;
+let xRange, yRange;
+let tempoMin = 60, tempoMax = 200;
+let hasFeatureData = false;
+let currentK = 6;
 let inited = false;
 
-// ── Size scaling (global — consistent across artist/genre switch) ────────────
+// Focus mode: sonic neighbors / path
+let clickedIndices = [];       // [] | [i] | [i, j]
+let focusSet       = new Set();
+
+// ── Size scaling ──────────────────────────────────────────────────────────────
 
 function scaleSize(s) {
   return 4 + ((s - globalMinSize) / (globalMaxSize - globalMinSize || 1)) * 20;
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+// ── Color helpers ─────────────────────────────────────────────────────────────
+
+function getRecordColor(r) {
+  if (colorMode === "artist") return artistColorMap[r.artist] || OTHER_COLOR;
+  return GENRE_PALETTE[r.artist_cluster % GENRE_PALETTE.length];
+}
+
+// ── Data helpers ──────────────────────────────────────────────────────────────
 
 function rankArtists(records, n) {
   const c = {};
@@ -49,7 +67,6 @@ function rankArtists(records, n) {
   return Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, n).map(([a]) => a);
 }
 
-// Returns { cid: [top1, top2, top3] }
 function buildClusterLabels(records) {
   const cc = {};
   for (const r of records) {
@@ -58,26 +75,170 @@ function buildClusterLabels(records) {
   }
   const labels = {};
   for (const [cid, ac] of Object.entries(cc)) {
-    labels[cid] = Object.entries(ac)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([a]) => a);
+    labels[cid] = Object.entries(ac).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([a]) => a);
   }
   return labels;
 }
 
-// ── Trace building ──────────────────────────────────────────────────────────
+function buildClusterProfiles(records) {
+  if (!hasFeatureData) return {};
+  const byCluster = {};
+  for (const r of records) {
+    const cid = r.artist_cluster;
+    if (!byCluster[cid]) byCluster[cid] = [];
+    byCluster[cid].push(r);
+  }
+  const globalMeans = {};
+  for (const f of FEATURE_KEYS) {
+    globalMeans[f] = records.reduce((s, r) => s + (r[f] || 0), 0) / records.length;
+  }
+  const profiles = {};
+  for (const [cid, recs] of Object.entries(byCluster)) {
+    profiles[cid] = { _globalMeans: globalMeans };
+    for (const f of FEATURE_KEYS) {
+      profiles[cid][f] = recs.reduce((s, r) => s + (r[f] || 0), 0) / recs.length;
+    }
+  }
+  return profiles;
+}
+
+function computeRange(vals, pad = 0.08) {
+  const mn = Math.min(...vals), mx = Math.max(...vals);
+  const d = (mx - mn) * pad;
+  return [mn - d, mx + d];
+}
+
+function applyData(data) {
+  allRecords = data.map((r, i) => ({ ...r, _idx: i }));
+  const sizes = allRecords.map(r => r.log_size);
+  globalMinSize = Math.min(...sizes);
+  globalMaxSize = Math.max(...sizes);
+  xRange = computeRange(allRecords.map(r => r.x));
+  yRange = computeRange(allRecords.map(r => r.y));
+  hasFeatureData = allRecords[0]?.acousticness !== undefined;
+  if (hasFeatureData) {
+    const tempos = allRecords.map(r => r.tempo);
+    tempoMin = Math.min(...tempos);
+    tempoMax = Math.max(...tempos);
+  }
+}
+
+// ── In-browser KMeans ─────────────────────────────────────────────────────────
+
+function seededRng(seed) {
+  let s = seed >>> 0;
+  return () => { s = (Math.imul(1664525, s) + 1013904223) >>> 0; return s / 4294967296; };
+}
+
+function kmeans(points, k, seed = 42, maxIter = 300) {
+  const rng = seededRng(seed);
+  const n = points.length, dims = points[0].length;
+
+  // k-means++ init
+  const centroids = [points[Math.floor(rng() * n)].slice()];
+  while (centroids.length < k) {
+    const dists = points.map(p =>
+      Math.min(...centroids.map(c => c.reduce((s, v, i) => s + (v - p[i]) ** 2, 0)))
+    );
+    const sum = dists.reduce((a, b) => a + b, 0);
+    let r = rng() * sum;
+    const chosen = dists.findIndex((d) => (r -= d) <= 0);
+    centroids.push(points[chosen < 0 ? n - 1 : chosen].slice());
+  }
+
+  let labels = new Array(n).fill(0);
+  for (let iter = 0; iter < maxIter; iter++) {
+    const next = points.map(p => {
+      let best = 0, bestD = Infinity;
+      for (let c = 0; c < k; c++) {
+        const d = centroids[c].reduce((s, v, i) => s + (v - p[i]) ** 2, 0);
+        if (d < bestD) { bestD = d; best = c; }
+      }
+      return best;
+    });
+    if (next.every((l, i) => l === labels[i])) break;
+    labels = next;
+    for (let c = 0; c < k; c++) {
+      const members = points.filter((_, i) => labels[i] === c);
+      if (!members.length) continue;
+      for (let j = 0; j < dims; j++)
+        centroids[c][j] = members.reduce((s, p) => s + p[j], 0) / members.length;
+    }
+  }
+  return { labels, centroids };
+}
+
+function recomputeArtistClusters(k) {
+  // StandardScaler normalization over the 8 display features
+  const means = FEATURE_KEYS.map(f => allRecords.reduce((s, r) => s + (r[f] || 0), 0) / allRecords.length);
+  const stds  = FEATURE_KEYS.map((f, i) => {
+    const v = allRecords.reduce((s, r) => s + ((r[f] || 0) - means[i]) ** 2, 0) / allRecords.length;
+    return Math.sqrt(v) || 1;
+  });
+  const normVec = r => FEATURE_KEYS.map((f, i) => ((r[f] || 0) - means[i]) / stds[i]);
+
+  // Group records by artist
+  const byArtist = {};
+  for (const r of allRecords) (byArtist[r.artist] = byArtist[r.artist] || []).push(r);
+
+  const qualified   = Object.keys(byArtist).filter(a => byArtist[a].length >= 3);
+  const unqualified = Object.keys(byArtist).filter(a => byArtist[a].length <  3);
+
+  // Mean normalized feature vector per qualified artist
+  const profiles = qualified.map(a => {
+    const vecs = byArtist[a].map(normVec);
+    return FEATURE_KEYS.map((_, i) => vecs.reduce((s, v) => s + v[i], 0) / vecs.length);
+  });
+
+  const { labels, centroids } = kmeans(profiles, k);
+
+  const artistCluster = {};
+  qualified.forEach((a, i) => { artistCluster[a] = labels[i]; });
+
+  // Assign tail artists (< 3 tracks) to nearest centroid
+  for (const a of unqualified) {
+    const vec = normVec(byArtist[a][0]);
+    let best = 0, bestD = Infinity;
+    for (let c = 0; c < k; c++) {
+      const d = centroids[c].reduce((s, v, i) => s + (v - vec[i]) ** 2, 0);
+      if (d < bestD) { bestD = d; best = c; }
+    }
+    artistCluster[a] = best;
+  }
+
+  for (const r of allRecords) r.artist_cluster = artistCluster[r.artist] ?? 0;
+  clusterLabels   = buildClusterLabels(allRecords);
+  clusterProfiles = buildClusterProfiles(allRecords);
+}
+
+// ── Sonic neighbors ───────────────────────────────────────────────────────────
+
+function getSonicNeighbors(idx, n) {
+  const r = allRecords[idx];
+  return allRecords
+    .map((s, i) => ({ i, d: Math.hypot(s.x - r.x, s.y - r.y) }))
+    .sort((a, b) => a.d - b.d)
+    .slice(1, n + 1)
+    .map(x => x.i);
+}
+
+// ── Trace building ─────────────────────────────────────────────────────────────
+
+function makeCustomdata(r) {
+  return {
+    title: r.title, artist: r.artist, play_count: r.play_count,
+    color: getRecordColor(r),
+    idx: r._idx,
+    feats: hasFeatureData ? FEATURE_KEYS.map(k => r[k]) : null,
+  };
+}
 
 function makeTrace(recs, color, opacity, isOther) {
   return {
     type: "scatter", mode: "markers",
     x: recs.map(r => r.x),
     y: recs.map(r => r.y),
-    customdata: recs.map(r => ({
-      title: r.title, artist: r.artist,
-      play_count: r.play_count,
-      color: isOther ? OTHER_COLOR : color,
-    })),
+    customdata: recs.map(r => makeCustomdata(r)),
     hoverinfo: "none",
     marker: {
       color,
@@ -88,7 +249,47 @@ function makeTrace(recs, color, opacity, isOther) {
   };
 }
 
+function makePinnedTrace(r) {
+  return {
+    type: "scatter", mode: "markers",
+    x: [r.x], y: [r.y],
+    customdata: [makeCustomdata(r)],
+    hoverinfo: "none",
+    marker: {
+      color: getRecordColor(r),
+      size: [scaleSize(r.log_size) + 5],
+      opacity: 1,
+      line: { width: 2.5, color: "#1a1a2e" },
+    },
+  };
+}
+
 function buildTraces(filtered) {
+  const isFocus = clickedIndices.length > 0;
+
+  if (isFocus) {
+    const clickedSet = new Set(clickedIndices);
+    const dim         = filtered.filter(r => !focusSet.has(r._idx) && !clickedSet.has(r._idx));
+    const highlighted = filtered.filter(r =>  focusSet.has(r._idx) && !clickedSet.has(r._idx));
+    const pinned      = clickedIndices.map(i => allRecords[i]);
+
+    const traces = [];
+    if (dim.length) traces.push(makeTrace(dim, OTHER_COLOR, 0.22, true));
+
+    // Render highlighted in their natural group colors
+    const byColor = {};
+    for (const r of highlighted) {
+      const c = getRecordColor(r);
+      (byColor[c] = byColor[c] || []).push(r);
+    }
+    for (const [color, recs] of Object.entries(byColor)) {
+      traces.push(makeTrace(recs, color, 0.9, false));
+    }
+    for (const r of pinned) traces.push(makePinnedTrace(r));
+    return traces;
+  }
+
+  // Normal mode
   const isFiltered = selectedGroup !== null;
 
   if (colorMode === "artist") {
@@ -106,7 +307,7 @@ function buildTraces(filtered) {
     return traces;
   }
 
-  // genre / neighborhood mode
+  // Neighborhood mode
   const cids = [...new Set(filtered.map(r => r.artist_cluster))].sort((a, b) => a - b);
   const traces = [];
   if (isFiltered) {
@@ -122,22 +323,22 @@ function buildTraces(filtered) {
   return traces;
 }
 
-// ── Render ───────────────────────────────────────────────────────────────────
+// ── Layout & render ───────────────────────────────────────────────────────────
 
-function getFiltered() {
-  return allRecords.filter(r => r.play_count >= +document.getElementById("plays-slider").value);
+function makeLayout() {
+  return {
+    paper_bgcolor: "#f7f5f0", plot_bgcolor: "#f7f5f0",
+    font: { color: "#1a1a2e", size: 11 },
+    xaxis: { range: xRange, showgrid: true, gridcolor: "#e8e5e0",
+             zeroline: false, showticklabels: false, fixedrange: true },
+    yaxis: { range: yRange, showgrid: true, gridcolor: "#e8e5e0",
+             zeroline: false, showticklabels: false, fixedrange: true },
+    hovermode: "closest", showlegend: false,
+    margin: { t: 10, r: 10, b: 10, l: 10 },
+  };
 }
 
-const BASE_LAYOUT = {
-  paper_bgcolor: "#f7f5f0", plot_bgcolor: "#f7f5f0",
-  font: { color: "#1a1a2e", size: 11 },
-  xaxis: { range: X_RANGE, showgrid: true, gridcolor: "#e8e5e0",
-           zeroline: false, showticklabels: false, fixedrange: true },
-  yaxis: { range: Y_RANGE, showgrid: true, gridcolor: "#e8e5e0",
-           zeroline: false, showticklabels: false, fixedrange: true },
-  hovermode: "closest", showlegend: false,
-  margin: { t: 10, r: 10, b: 10, l: 10 },
-};
+function getFiltered() { return allRecords; }
 
 function render() {
   const filtered = getFiltered();
@@ -147,39 +348,127 @@ function render() {
       : filtered.filter(r => r.artist_cluster === selectedGroup).length;
 
   document.getElementById("track-count").textContent =
-    `${count.toLocaleString()} / ${allRecords.length.toLocaleString()} tracks`;
+    `${allRecords.length.toLocaleString()} tracks`;
 
   if (!inited) {
-    Plotly.newPlot("plot", buildTraces(filtered), BASE_LAYOUT, { responsive: true, displayModeBar: false });
+    Plotly.newPlot("plot", buildTraces(filtered), makeLayout(), { responsive: true, displayModeBar: false });
     inited = true;
     initHover();
+    initClick();
   } else {
-    Plotly.react("plot", buildTraces(filtered), BASE_LAYOUT);
+    Plotly.react("plot", buildTraces(filtered), makeLayout());
   }
+  updateNeighborhoodInfo();
 }
 
-// ── Fixed hover panel ────────────────────────────────────────────────────────
+// ── Hover panel ────────────────────────────────────────────────────────────────
+
+function normalizeFeature(key, val) {
+  if (val == null) return 0;
+  if (key === "tempo") return Math.max(0, Math.min(1, (val - tempoMin) / (tempoMax - tempoMin || 1)));
+  return Math.max(0, Math.min(1, val));
+}
+
+function renderFeatureBars(containerId, feats, globalMeans, accentColor) {
+  const el = document.getElementById(containerId);
+  if (!hasFeatureData || !feats) { el.innerHTML = ""; return; }
+  el.style.setProperty("--bar-color", accentColor || "#999");
+  el.innerHTML = FEATURE_KEYS.map((k, i) => {
+    const pct = (normalizeFeature(k, feats[i]) * 100).toFixed(0);
+    const avgPct = globalMeans
+      ? (normalizeFeature(k, globalMeans[k]) * 100).toFixed(0) : null;
+    return `<div class="feat-row">
+      <span class="feat-lbl">${FEATURE_LABELS[i]}</span>
+      <div class="feat-bar-bg">
+        <div class="feat-bar-fill" style="width:${pct}%"></div>
+        ${avgPct !== null ? `<div class="feat-bar-avg" style="left:${avgPct}%"></div>` : ""}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function updateClickHint() {
+  const el = document.getElementById("hp-click-hint");
+  if (!el) return;
+  el.textContent = clickedIndices.length === 0
+    ? "Click · sonic neighbors"
+    : "Click again · clear";
+}
 
 function initHover() {
-  const panel = document.getElementById("hover-panel");
-  document.getElementById("plot").on("plotly_hover", function(data) {
+  const panel     = document.getElementById("hover-panel");
+  const plotDiv   = document.getElementById("plot");
+  const pulseRing = document.getElementById("pulse-ring");
+
+  plotDiv.on("plotly_hover", function(data) {
     const r = data.points[0].customdata;
     document.getElementById("hp-dot").style.background = r.color;
     document.getElementById("hp-title").textContent    = r.title;
     document.getElementById("hp-artist").textContent   = r.artist;
     document.getElementById("hp-plays").textContent    = r.play_count.toLocaleString() + " plays";
+    renderFeatureBars("hp-features", r.feats, null, r.color);
     panel.classList.add("has-data");
+    updateClickHint();
+
+    const la = plotDiv._fullLayout;
+    const px = la.margin.l + la.xaxis.l2p(data.points[0].x);
+    const py = la.margin.t + la.yaxis.l2p(data.points[0].y);
+    pulseRing.style.left        = px + "px";
+    pulseRing.style.top         = py + "px";
+    pulseRing.style.borderColor = r.color;
+    pulseRing.style.display     = "block";
   });
-  document.getElementById("plot").on("plotly_unhover", function() {
+
+  plotDiv.on("plotly_unhover", function() {
     panel.classList.remove("has-data");
+    pulseRing.style.display = "none";
   });
+}
+
+// ── Click / focus ─────────────────────────────────────────────────────────────
+
+function initClick() {
+  document.getElementById("plot").on("plotly_click", function(data) {
+    const idx = data.points[0].customdata.idx;
+
+    if (clickedIndices.length === 1 && clickedIndices[0] === idx) {
+      clickedIndices = [];
+      focusSet = new Set();
+    } else {
+      clickedIndices = [idx];
+      focusSet = new Set(getSonicNeighbors(idx, N_NEIGHBORS));
+    }
+
+    render();
+    updateClickHint();
+  });
+}
+
+// ── Neighborhood info ─────────────────────────────────────────────────────────
+
+function updateNeighborhoodInfo() {
+  const panel = document.getElementById("neighborhood-info");
+  if (!panel) return;
+
+  if (!hasFeatureData || colorMode !== "genre" || selectedGroup === null) {
+    panel.style.display = "none";
+    return;
+  }
+
+  const profile = clusterProfiles[selectedGroup];
+  if (!profile) { panel.style.display = "none"; return; }
+
+  panel.style.display = "block";
+  const color = GENRE_PALETTE[selectedGroup % GENRE_PALETTE.length];
+  const feats = FEATURE_KEYS.map(k => profile[k]);
+  renderFeatureBars("ni-bars", feats, profile._globalMeans, color);
 }
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
 function makeArtistRow(name, color, count) {
   const row = document.createElement("div");
-  row.className  = "grow";
+  row.className   = "grow";
   row.style.color = color;
   row.innerHTML = `<div class="gdot" style="background:${color}"></div>
     <span class="gname">${name}</span>
@@ -208,6 +497,8 @@ function buildSidebar() {
   selectedGroup  = null;
   const counts   = {};
 
+  document.getElementById("k-slider-wrap").style.display = colorMode === "genre" ? "block" : "none";
+
   if (colorMode === "artist") {
     document.getElementById("group-label").textContent = "Artists";
     for (const r of allRecords) counts[r.artist] = (counts[r.artist] || 0) + 1;
@@ -228,6 +519,7 @@ function buildSidebar() {
       list.appendChild(row);
     }
   }
+  updateNeighborhoodInfo();
 }
 
 function selectGroup(row, key) {
@@ -242,7 +534,7 @@ function selectGroup(row, key) {
   render();
 }
 
-// ── Mode toggle ───────────────────────────────────────────────────────────────
+// ── Mode toggle ────────────────────────────────────────────────────────────────
 
 document.querySelectorAll(".mode-btn").forEach(btn => btn.addEventListener("click", () => {
   if (btn.dataset.mode === colorMode) return;
@@ -253,30 +545,41 @@ document.querySelectorAll(".mode-btn").forEach(btn => btn.addEventListener("clic
   render();
 }));
 
-// Min-plays filter
-document.getElementById("plays-slider").addEventListener("input", function() {
-  document.getElementById("plays-val").textContent = this.value;
+// ── Neighborhood count slider ─────────────────────────────────────────────────
+
+document.getElementById("k-slider").addEventListener("input", function() {
+  currentK = +this.value;
+  document.getElementById("k-val").textContent = currentK;
+  recomputeArtistClusters(currentK);
+  buildSidebar();
   render();
 });
 
-// ── Bootstrap ────────────────────────────────────────────────────────────────
+// ── Info modal ────────────────────────────────────────────────────────────────
+
+document.getElementById("info-btn").addEventListener("click", () => {
+  document.getElementById("info-overlay").classList.add("open");
+});
+document.getElementById("info-close").addEventListener("click", () => {
+  document.getElementById("info-overlay").classList.remove("open");
+});
+document.getElementById("info-overlay").addEventListener("click", function(e) {
+  if (e.target === this) this.classList.remove("open");
+});
+
+// ── Bootstrap ──────────────────────────────────────────────────────────────────
 
 fetch(DATA_PATH)
   .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
   .then(data => {
-    allRecords = data;
-
-    const sizes = allRecords.map(r => r.log_size);
-    globalMinSize = Math.min(...sizes);
-    globalMaxSize = Math.max(...sizes);
+    applyData(data);
 
     const topArtists = rankArtists(allRecords, TOP_N_ARTISTS);
     topArtists.forEach((a, i) => artistColorMap[a] = ARTIST_PALETTE[i]);
-    clusterLabels = buildClusterLabels(allRecords);
+    clusterLabels   = buildClusterLabels(allRecords);
+    clusterProfiles = buildClusterProfiles(allRecords);
 
-    // Set button label and slider max from data
     document.getElementById("genre-btn").textContent = NEIGHBORHOOD_LABEL;
-    document.getElementById("plays-slider").max = Math.max(...allRecords.map(r => r.play_count));
 
     document.getElementById("loading").style.display = "none";
     buildSidebar();

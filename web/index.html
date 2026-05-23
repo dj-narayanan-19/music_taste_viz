@@ -68,23 +68,63 @@
     .gcluster-names .gname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .gsec { font-size: 0.62rem; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-    /* Min-plays filter */
-    .filter-lbl {
-      display: flex; justify-content: space-between;
-      font-size: 0.67rem; color: #aaa; margin-bottom: 4px;
+    /* ── k slider (neighborhood mode only) ──────────── */
+    #k-slider-wrap { flex-shrink: 0; }
+    #k-slider-wrap .sl { margin-bottom: 6px; }
+    #k-slider-wrap input[type=range] {
+      width: 100%; accent-color: #1a1a2e; cursor: pointer;
     }
-    input[type=range] { width: 100%; accent-color: #1a1a2e; cursor: pointer; }
+
+    /* ── Neighborhood info panel (bottom of sidebar) ─ */
+    #neighborhood-info {
+      display: none;
+      padding-top: 14px;
+      border-top: 1px solid #e8e5e0;
+      flex-shrink: 0;
+    }
+
+    /* ── Feature bars (shared by hover panel + neighborhood info) ─ */
+    .feat-row {
+      display: flex; align-items: center; gap: 6px; margin-top: 4px;
+    }
+    .feat-lbl {
+      font-size: 0.58rem; color: #bbb; width: 92px; flex-shrink: 0; text-align: right;
+    }
+    .feat-bar-bg {
+      flex: 1; height: 3px; background: #e8e5e0; border-radius: 2px; position: relative;
+    }
+    .feat-bar-fill {
+      height: 100%; border-radius: 2px;
+      background: var(--bar-color, #aaa); max-width: 100%;
+    }
+    .feat-bar-avg {
+      position: absolute; top: -2.5px; width: 1.5px; height: 8px;
+      background: rgba(0,0,0,0.18); transform: translateX(-50%);
+    }
 
     /* ── Plot area ───────────────────────────────────── */
     .plot-wrap { flex: 1; position: relative; min-width: 0; min-height: 0; }
     #plot { width: 100%; height: 100%; }
+
+    /* ── Pulse ring ──────────────────────────────────── */
+    @keyframes pulse-ring {
+      0%   { transform: translate(-50%, -50%) scale(1);   opacity: 0.75; }
+      100% { transform: translate(-50%, -50%) scale(2.6); opacity: 0; }
+    }
+    #pulse-ring {
+      position: absolute; pointer-events: none; z-index: 5;
+      width: 14px; height: 14px; border-radius: 50%;
+      border: 1.5px solid transparent;
+      animation: pulse-ring 0.7s ease-out infinite;
+      display: none;
+    }
 
     /* ── Fixed hover panel ───────────────────────────── */
     #hover-panel {
       position: absolute; bottom: 16px; right: 16px;
       background: rgba(255,255,255,0.97);
       border: 1px solid #d8d5cf; border-radius: 8px;
-      padding: 11px 14px; min-width: 168px;
+      padding: 11px 14px; width: 230px;
       box-shadow: 0 3px 12px rgba(0,0,0,0.09);
       pointer-events: none;
     }
@@ -97,12 +137,47 @@
     #hp-title { font-size: 0.8rem; font-weight: 600; color: #1a1a2e; line-height: 1.3; }
     #hp-artist { font-size: 0.72rem; color: #555; margin-top: 2px; }
     #hp-plays { font-size: 0.65rem; color: #aaa; margin-top: 4px; }
+    #hp-features { margin-top: 9px; }
+    #hp-click-hint { font-size: 0.57rem; color: #ccc; margin-top: 9px; font-style: italic; }
 
     #loading {
       position: absolute; inset: 0; display: flex; align-items: center;
       justify-content: center; background: #f7f5f0;
       font-size: 0.85rem; color: #bbb; z-index: 10;
     }
+
+    /* ── Info button ─────────────────────────────────── */
+    #info-btn {
+      margin-left: 8px; padding: 3px 9px; border-radius: 4px;
+      border: 1px solid #1a1a2e; background: transparent; color: #1a1a2e;
+      font-size: 0.65rem; cursor: pointer; font-family: inherit;
+      transition: background 0.12s, color 0.12s; flex-shrink: 0; white-space: nowrap;
+    }
+    #info-btn:hover { background: #1a1a2e; color: #f7f5f0; }
+
+    /* ── Info modal ──────────────────────────────────── */
+    #info-overlay {
+      display: none; position: fixed; inset: 0; z-index: 100;
+      background: rgba(0,0,0,0.35); align-items: flex-start; justify-content: flex-end;
+    }
+    #info-overlay.open { display: flex; }
+    #info-modal {
+      margin: 48px 16px 0 0; background: #fff; border-radius: 10px;
+      border: 1px solid #d8d5cf; padding: 20px 22px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.14); max-width: 300px; width: 100%;
+    }
+    #info-modal h2 { font-size: 0.82rem; font-weight: 700; color: #1a1a2e; margin-bottom: 14px; }
+    .info-section { margin-bottom: 12px; }
+    .info-section h3 { font-size: 0.67rem; font-weight: 600; color: #555; text-transform: uppercase;
+                       letter-spacing: 0.07em; margin-bottom: 4px; }
+    .info-section p  { font-size: 0.71rem; color: #444; line-height: 1.5; }
+    .info-section a  { color: #1a1a2e; text-underline-offset: 2px; }
+    #info-close {
+      display: block; margin-top: 16px; width: 100%; padding: 7px;
+      background: #1a1a2e; color: #f7f5f0; border: none; border-radius: 5px;
+      font-size: 0.72rem; cursor: pointer; font-family: inherit;
+    }
+    #info-close:hover { background: #2e2e50; }
   </style>
 </head>
 <body>
@@ -110,9 +185,44 @@
 
   <header>
     <h1>Music Taste Map</h1>
-    <span class="subtitle">Sonic similarity · UMAP</span>
+    <span class="subtitle">Sonic similarity</span>
     <span id="track-count"></span>
+    <button id="info-btn">What am I looking at?</button>
   </header>
+
+  <div id="info-overlay">
+    <div id="info-modal">
+      <h2>What am I looking at?</h2>
+
+      <div class="info-section">
+        <h3>The map</h3>
+        <p>Every song is a bubble on the map positioned based on its sound qualities. Songs that sound alike are put near each other.</p>
+      </div>
+
+      <div class="info-section">
+        <h3>Bubble size</h3>
+        <p>Bigger = more plays.</p>
+      </div>
+
+      <div class="info-section">
+        <h3>Color modes</h3>
+        <p><strong>Artist</strong> — 50 artists with the most plays in the dataset are colored.<br>
+           <strong>Neighborhood</strong> — groups all songs into 6 broad sonic clusters. Click a cluster to see what connects them.</p>
+      </div>
+
+      <div class="info-section">
+        <h3>Feature bars</h3>
+        <p>Hover any song to see its audio fingerprint — 8 bars for acousticness, danceability, energy, and more. The faint tick marks the global average for each feature. <a href="https://developer.spotify.com/documentation/web-api/reference/get-audio-features" target="_blank" rel="noopener">What do these mean?</a></p>
+      </div>
+
+      <div class="info-section">
+        <h3>Sonic neighbors</h3>
+        <p>Click any song to highlight its 15 most sonically similar neighbors. Click it again to clear.</p>
+      </div>
+
+      <button id="info-close">Got it</button>
+    </div>
+  </div>
 
   <div class="body">
     <aside>
@@ -129,15 +239,20 @@
         <div class="group-list" id="group-list"></div>
       </div>
 
-      <div>
-        <div class="sl">Filters</div>
-        <div class="filter-lbl"><span>Min plays</span><span id="plays-val">1</span></div>
-        <input type="range" id="plays-slider" min="1" value="1" />
+      <div id="k-slider-wrap" style="display:none">
+        <div class="sl">Neighborhoods &nbsp;<span id="k-val">6</span></div>
+        <input type="range" id="k-slider" min="2" max="12" value="6" />
+      </div>
+
+      <div id="neighborhood-info">
+        <div class="sl">This Neighborhood</div>
+        <div id="ni-bars"></div>
       </div>
     </aside>
 
     <div class="plot-wrap">
       <div id="plot"></div>
+      <div id="pulse-ring"></div>
       <div id="hover-panel">
         <div class="hp-hint">Hover over a point</div>
         <div class="hp-content">
@@ -147,6 +262,8 @@
           </div>
           <div id="hp-artist"></div>
           <div id="hp-plays"></div>
+          <div id="hp-features"></div>
+          <div id="hp-click-hint"></div>
         </div>
       </div>
     </div>

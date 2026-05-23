@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
+from sklearn.manifold import TSNE
 import umap
 import hdbscan
 
@@ -49,6 +50,15 @@ AUDIO_FEATURE_COLS = [
 UMAP_N_NEIGHBORS = 15
 UMAP_MIN_DIST = 0.1
 UMAP_RANDOM_STATE = 42
+
+TSNE_PERPLEXITY = 30
+TSNE_N_ITER = 1000
+TSNE_RANDOM_STATE = 42
+
+DISPLAY_FEATURES = [
+    "acousticness", "danceability", "energy", "instrumentalness",
+    "liveness", "speechiness", "valence", "tempo",
+]
 
 HDBSCAN_MIN_CLUSTER_SIZE = 10
 HDBSCAN_MIN_SAMPLES = 5
@@ -96,6 +106,28 @@ def run_umap(
     )
     coords = reducer.fit_transform(normalized)
     logging.info("UMAP done.")
+    return coords
+
+
+def run_tsne(
+    normalized: np.ndarray,
+    perplexity: int = TSNE_PERPLEXITY,
+    n_iter: int = TSNE_N_ITER,
+) -> np.ndarray:
+    reducer = TSNE(
+        n_components=2,
+        perplexity=perplexity,
+        max_iter=n_iter,
+        random_state=TSNE_RANDOM_STATE,
+        metric="euclidean",
+        init="pca",
+    )
+    logging.info(
+        f"Running t-SNE (perplexity={perplexity}, n_iter={n_iter}) "
+        f"on {normalized.shape[0]:,} tracks..."
+    )
+    coords = reducer.fit_transform(normalized)
+    logging.info("t-SNE done.")
     return coords
 
 
@@ -196,17 +228,21 @@ def build_viz_records(
     records = []
     for i, row in enumerate(rows):
         play_count = int(row["play_count"])
-        records.append({
-            "artist": row["artist"],
-            "title": row["title"],
-            "play_count": play_count,
-            "spotify_id": row["spotify_id"],
-            "x": round(float(coords[i, 0]), 4),
-            "y": round(float(coords[i, 1]), 4),
-            "cluster": int(cluster_labels[i]),
+        rec = {
+            "artist":         row["artist"],
+            "title":          row["title"],
+            "play_count":     play_count,
+            "spotify_id":     row["spotify_id"],
+            "x":              round(float(coords[i, 0]), 4),
+            "y":              round(float(coords[i, 1]), 4),
+            "cluster":        int(cluster_labels[i]),
             "artist_cluster": artist_cluster.get(row["artist"], 0),
-            "log_size": round(math.log1p(play_count), 4),
-        })
+            "log_size":       round(math.log1p(play_count), 4),
+        }
+        for f in DISPLAY_FEATURES:
+            if f in row:
+                rec[f] = round(float(row[f]), 4)
+        records.append(rec)
     return records
 
 
@@ -220,13 +256,21 @@ def save_viz_json(records: list[dict], output_path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build visualization data from enriched dataset")
     parser.add_argument("--input", type=Path, default=DATA_PROCESSED_DIR / "dataset.csv")
-    parser.add_argument("--output", type=Path, default=DATA_PROCESSED_DIR / "viz_data.json")
+    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--method", choices=["umap", "tsne"], default="umap",
+                        help="Dimensionality reduction method (default: umap)")
     parser.add_argument("--umap-neighbors", type=int, default=UMAP_N_NEIGHBORS, metavar="N")
     parser.add_argument("--umap-min-dist", type=float, default=UMAP_MIN_DIST, metavar="F")
+    parser.add_argument("--tsne-perplexity", type=int, default=TSNE_PERPLEXITY, metavar="N")
+    parser.add_argument("--tsne-n-iter", type=int, default=TSNE_N_ITER, metavar="N")
     parser.add_argument("--hdbscan-min-cluster", type=int, default=HDBSCAN_MIN_CLUSTER_SIZE, metavar="N")
     parser.add_argument("--artist-clusters", type=int, default=ARTIST_N_CLUSTERS, metavar="K",
                         help=f"Number of KMeans artist clusters (default: {ARTIST_N_CLUSTERS})")
     args = parser.parse_args()
+    if args.output is None:
+        args.output = DATA_PROCESSED_DIR / (
+            "viz_data_tsne.json" if args.method == "tsne" else "viz_data.json"
+        )
 
     logging.basicConfig(
         level=logging.INFO,
@@ -238,7 +282,10 @@ def main() -> None:
     logging.info(f"Loaded {len(rows):,} tracks from {args.input}")
 
     normalized = normalize(feature_matrix)
-    coords = run_umap(normalized, n_neighbors=args.umap_neighbors, min_dist=args.umap_min_dist)
+    if args.method == "tsne":
+        coords = run_tsne(normalized, perplexity=args.tsne_perplexity, n_iter=args.tsne_n_iter)
+    else:
+        coords = run_umap(normalized, n_neighbors=args.umap_neighbors, min_dist=args.umap_min_dist)
     cluster_labels = run_hdbscan(normalized, min_cluster_size=args.hdbscan_min_cluster)
 
     logging.info("Building artist profiles and clustering...")

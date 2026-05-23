@@ -16,7 +16,7 @@ Click any chip to highlight just that artist or cluster.
 
 1. **Fetch** — pulls your top tracks + play counts from Last.fm
 2. **Enrich** — looks up audio features (energy, tempo, mood, etc.) for each track via Soundcharts
-3. **Reduce** — runs UMAP to compress 10 audio dimensions down to 2D coordinates
+3. **Reduce** — runs UMAP (or t-SNE) to compress 10 audio dimensions down to 2D coordinates
 4. **Cluster** — groups similar-sounding artists together with KMeans
 5. **Visualize** — renders everything as a Plotly.js scatter plot in a static HTML page
 
@@ -60,6 +60,13 @@ python -m http.server 8080
 | `--limit N` | `1000` | Max tracks to enrich per run |
 | `--features-only` | off | Skip Spotify ID search; use cached IDs only |
 
+To use t-SNE instead of UMAP for the 2D layout, run the processing step directly:
+
+```bash
+python processing/build_viz_data.py --method tsne
+# outputs data/processed/viz_data_tsne.json
+```
+
 ## Project structure
 
 ```
@@ -83,5 +90,6 @@ music_taste_viz/
 
 - **Last.fm** instead of Spotify for play history — Spotify only keeps your last 50 plays; Last.fm logs everything
 - **Soundcharts** instead of Spotify for audio features — Spotify deprecated their audio features API for new apps in late 2024
-- **UMAP** instead of t-SNE — better at preserving global structure (similar artists cluster together, not just similar songs)
+- **UMAP** as the default over t-SNE — better global structure preservation (similar artists cluster together, not just similar songs); t-SNE is available as an alternative via `--method tsne`
 - **Static site** — nothing to host, easy to share, works on GitHub Pages
+- **Daily automation** — GitHub Actions runs the pipeline every morning and commits updated data back to the repo

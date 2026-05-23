@@ -55,7 +55,8 @@ This runs all four steps in order and aborts on the first failure. Options:
 
 | Flag | Default | Description |
 |---|---|---|
-| `--min-plays N` | `5` | Minimum play count to include a track |
+| `--min-plays N` | `10` | Minimum play count to include a track |
+| `--limit N` | `1000` | Max tracks to enrich per run |
 | `--features-only` | off | Skip Spotify ID search; use only cached IDs |
 
 Individual steps can also be run directly (see below).
@@ -110,22 +111,29 @@ All API results are persisted locally to avoid re-spending quota on re-runs:
 All processing is handled by a single script: `build_viz_data.py`.
 
 1. Load `data/processed/dataset.csv`
-2. Normalize all 12 audio feature columns with `StandardScaler` (zero mean, unit variance per feature — preferred over MinMax because loudness in dB and tempo in BPM are on very different scales from the 0–1 features)
-3. Run UMAP on the normalized 12-dimensional vectors → 2D coordinates `(x, y)`
-4. Run HDBSCAN clustering on the same normalized 12D space (not on the 2D UMAP output — clustering in the full feature space is more accurate)
-5. Compute bubble size: `log_size = log(play_count + 1)`
-6. Output: `data/processed/viz_data.json` — one record per track with `(artist, title, play_count, spotify_id, x, y, cluster, log_size)`
+2. Build **10-feature matrix**: drop `loudness` (r=+0.75 with energy — collinear), `timeSignature` (92% in 4/4; outliers at 0/1 dominated UMAP), `mode` (binary dominated x-axis after scaling); encode `key` circularly as `key_sin` / `key_cos`. Remaining features: acousticness, danceability, energy, instrumentalness, liveness, speechiness, tempo, valence, key_sin, key_cos.
+3. Normalize with `StandardScaler` (zero mean, unit variance per feature — preferred over MinMax because tempo in BPM and the 0–1 features are on very different scales)
+4. Run **UMAP** (default) or **t-SNE** (`--method tsne`) on the normalized 10D vectors → 2D coordinates `(x, y)`
+5. Run HDBSCAN clustering on the same normalized 10D space (not on the 2D output — clustering in the full feature space is more accurate)
+6. Build artist profiles (unweighted mean feature vector per artist) and run KMeans (k=6) to assign each artist an `artist_cluster`. Artists with fewer than 3 tracks are assigned to the nearest centroid.
+7. Compute bubble size: `log_size = log(play_count + 1)`
+8. Output: `data/processed/viz_data.json` (UMAP) or `viz_data_tsne.json` (t-SNE) — one record per track with `(artist, title, play_count, spotify_id, x, y, cluster, artist_cluster, log_size)`
 
 ```bash
 python processing/build_viz_data.py [--input PATH] [--output PATH] \
-  [--umap-neighbors N] [--umap-min-dist F] [--hdbscan-min-cluster N]
+  [--method umap|tsne] [--umap-neighbors N] [--umap-min-dist F] \
+  [--tsne-perplexity N] [--tsne-n-iter N] [--hdbscan-min-cluster N] [--artist-clusters K]
 ```
 
 | Parameter | Default | Effect |
 |---|---|---|
-| `--umap-neighbors` | `15` | Local neighborhood size; lower = more local structure |
-| `--umap-min-dist` | `0.1` | Minimum spread of points in 2D |
-| `--hdbscan-min-cluster` | `15` | Minimum tracks to form a cluster |
+| `--method` | `umap` | Dimensionality reduction method: `umap` or `tsne` |
+| `--umap-neighbors` | `15` | UMAP neighborhood size; lower = more local structure |
+| `--umap-min-dist` | `0.1` | UMAP minimum spread of points in 2D |
+| `--tsne-perplexity` | `30` | t-SNE perplexity (local neighborhood size) |
+| `--tsne-n-iter` | `1000` | t-SNE optimization iterations |
+| `--hdbscan-min-cluster` | `10` | Minimum tracks to form a cluster |
+| `--artist-clusters` | `6` | Number of KMeans artist clusters |
 
 ---
 
@@ -137,11 +145,11 @@ Static HTML/JS — no backend required when viewing.
 - **`web/app.js`**: Loads `data/processed/viz_data.json`, renders a Plotly.js scatter plot
 
 Features:
-- Hover tooltip: track title, artist, play count, cluster
+- Hover panel: track title, artist, play count
 - Bubble size = `log(play_count + 1)`, scaled to pixel range 4–24
-- Bubble color = cluster assignment (qualitative palette; cluster `-1` / noise rendered in grey)
-- Cluster dropdown filter (dynamically populated from data)
-- Min-plays range slider to hide low-count tracks
+- **Dual color mode toggle**: "Artist" (top-50 artists, golden-angle HSL palette) or "Neighborhood" (6 artist clusters, fixed bright palette)
+- Chip strip: click any artist or neighborhood chip to highlight/isolate that group; click again to deselect
+- Axis bounds computed dynamically from data with 8% padding — stable across color mode switches
 - Graceful error state if viz data hasn't been generated yet
 
 To view locally:
@@ -156,12 +164,16 @@ python -m http.server 8080
 
 ## Static vs. Live
 
-This project is **static by design**. The pipeline is run locally to generate a snapshot. The resulting web app reads pre-generated data and makes no live API calls. This makes it:
+This project is **static by design**. The pipeline generates a snapshot; the web app reads pre-generated data and makes no live API calls. This makes it:
 - Easy to share (just a static site)
 - Fast to load
 - Suitable for hosting on GitHub Pages
 
-The pipeline can be re-run periodically (e.g. monthly) to regenerate the snapshot with updated listening data.
+---
+
+## Automation
+
+A GitHub Actions workflow (`.github/workflows/daily_pipeline.yml`) runs the full pipeline daily at 9 AM ET and on manual dispatch. It writes a `.env` file from repository secrets, runs `run_pipeline.py TheRedBaron1999 --min-plays 10 --limit 2000`, then commits changed caches and `viz_data.json` back to the repo with `[skip ci]` to avoid looping.
 
 ---
 
@@ -174,8 +186,8 @@ The pipeline can be re-run periodically (e.g. monthly) to regenerate the snapsho
 | Spotify API | `spotipy` (track ID resolution only, optional) |
 | Audio features | Soundcharts API (`requests`) |
 | Data storage | CSV (flat files in `data/raw/` and `data/processed/`) |
-| Dimensionality reduction | `umap-learn` |
-| Clustering | `hdbscan` |
+| Dimensionality reduction | `umap-learn` (UMAP), `scikit-learn` (t-SNE) |
+| Clustering | `hdbscan` (tracks), `scikit-learn` KMeans (artists) |
 | Normalization | `scikit-learn` (`StandardScaler`) |
 | Visualization | Plotly.js (CDN) |
 | Hosting | GitHub Pages |
@@ -221,10 +233,10 @@ music_taste_viz/
 - **Top 1,000 tracks only**: Fits within the Soundcharts free tier (1,000 requests). Tracks below ~78 plays are less meaningful for a "music taste" snapshot anyway.
 - **Dual caching layer**: Spotify ID cache + Soundcharts feature cache mean the pipeline can be interrupted and resumed without re-spending any API quota.
 - **Inner-join in `build_dataset.py`**: Dataset is built from the enriched tracks outward, so only tracks with complete audio features are included. No silent large-scale drops.
-- **All 12 features for UMAP/HDBSCAN**: The full feature set — including `key`, `mode`, and `timeSignature` — is used for both dimensionality reduction and clustering. `StandardScaler` normalizes across the mixed scales (dB, BPM, 0–1 ratios) before any distance computation.
-- **Single processing script**: `build_viz_data.py` handles normalize → UMAP → HDBSCAN in one pass. Splitting into separate scripts would add orchestration complexity with no benefit, since all three steps share the same normalized matrix.
-- **UMAP over t-SNE**: Better preservation of global structure; faster; more suitable for sharing clusters.
-- **Clustering in original 12D space**: UMAP coordinates are for display only; cluster assignments are computed in the full feature space for accuracy.
+- **10-feature matrix (not 12)**: `loudness` dropped (r=+0.75 with `energy` — collinear); `timeSignature` dropped (92% in 4/4; outlier values at 0/1 dominated UMAP layout); `mode` dropped (binary feature dominated x-axis after scaling); `key` re-encoded as `key_sin`/`key_cos` (circular, avoids false proximity between keys 0 and 11).
+- **UMAP as default, t-SNE as alternative**: UMAP better preserves global structure and runs faster. t-SNE is available via `--method tsne` (outputs `viz_data_tsne.json`) for comparing local cluster tightness. Both use the same 10D normalized feature space.
+- **Single processing script**: `build_viz_data.py` handles all steps (normalize → DR → HDBSCAN → artist clustering) in one pass. All steps share the same normalized matrix, so splitting would add orchestration with no benefit.
+- **Clustering in original 10D space**: DR coordinates are for display only; cluster assignments are computed in the full feature space for accuracy.
 - **Log scale for play count**: Prevents songs with very high play counts from visually dominating.
 - **Plotly.js over D3**: Faster to build correct interactions (hover, zoom, pan); good defaults for scatter plots. D3 would add significant boilerplate for the same result.
 - **Static output**: Simplifies sharing and hosting; no server required.
