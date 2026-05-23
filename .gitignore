@@ -4,5 +4,9 @@ __pycache__/
 data/processed/*
 !data/processed/viz_data.json
 !data/processed/.gitkeep
+data/raw/*.csv
+data/raw/*.txt
 .DS_Store
-.cache/
+.cache
+logs/
+web/mockups/
