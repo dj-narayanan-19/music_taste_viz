@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-LASTFM_API_BASE = "http://ws.audioscrobbler.com/2.0/"
+LASTFM_API_BASE = "https://ws.audioscrobbler.com/2.0/"
 PAGE_LIMIT = 1000  # max per-page limit allowed by Last.fm
 DEFAULT_MIN_PLAYS = 5
 DATA_RAW_DIR = Path(__file__).parent.parent / "data" / "raw"
@@ -53,7 +53,14 @@ def fetch_top_tracks(
             "period": "overall",
         }
 
-        resp = requests.get(LASTFM_API_BASE, params=params, timeout=30)
+        # Last.fm occasionally returns transient 500s; retry up to 3 times
+        for attempt in range(3):
+            resp = requests.get(LASTFM_API_BASE, params=params, timeout=30)
+            if resp.status_code < 500:
+                break
+            wait = 2 ** attempt
+            logging.warning(f"Last.fm returned {resp.status_code} on page {page}, retrying in {wait}s...")
+            time.sleep(wait)
         resp.raise_for_status()
         data = resp.json()
 

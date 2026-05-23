@@ -2,7 +2,7 @@
 requests>=2.31.0
 python-dotenv>=1.0.0
 
-# Phase 1 — Spotify enrichment (fetch_spotify.py)
+# Phase 1 — Spotify ID resolution (fetch_spotify.py); optional, falls back to cache
 spotipy>=2.23.0
 
 # Phase 2 — Processing
