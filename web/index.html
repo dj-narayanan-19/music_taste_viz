@@ -68,6 +68,38 @@
     .gcluster-names .gname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .gsec { font-size: 0.62rem; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+    /* ── Recalculate button ─────────────────────────── */
+    #recalc-wrap { flex-shrink: 0; }
+    #recalc-btn {
+      width: 100%; padding: 6px 0;
+      font-size: 0.7rem; font-family: inherit;
+      border: 1px solid #1a1a2e; border-radius: 5px;
+      background: transparent; color: #1a1a2e; cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+    }
+    #recalc-btn:hover:not(:disabled) { background: #1a1a2e; color: #f7f5f0; }
+    #recalc-btn:disabled { opacity: 0.55; cursor: wait; }
+    #recalc-bar-wrap {
+      margin-top: 6px; height: 3px; background: #e8e5e0; border-radius: 2px; display: none;
+    }
+    #recalc-bar { height: 100%; background: #1a1a2e; border-radius: 2px; width: 0%; transition: width 0.15s; }
+
+    /* ── Feature selector ───────────────────────────── */
+    #feature-wrap { flex-shrink: 0; }
+    .feature-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 2px; margin-top: 2px;
+    }
+    .feat-chip {
+      display: flex; align-items: center; gap: 4px;
+      font-size: 0.62rem; color: #555; cursor: pointer;
+      padding: 2px 4px; border-radius: 3px; user-select: none;
+    }
+    .feat-chip:hover { background: rgba(0,0,0,0.04); }
+    .feat-chip input[type=checkbox] {
+      width: 11px; height: 11px; flex-shrink: 0;
+      cursor: pointer; accent-color: #1a1a2e; margin: 0;
+    }
+
     /* ── Terrain select ──────────────────────────────── */
     #terrain-select {
       width: 100%; padding: 5px 7px;
@@ -133,6 +165,22 @@
       position: absolute; top: -2.5px; width: 1.5px; height: 8px;
       background: rgba(0,0,0,0.18); transform: translateX(-50%);
     }
+
+    /* ── Zoom controls ───────────────────────────────── */
+    #zoom-controls {
+      position: absolute; top: 12px; right: 12px; z-index: 5;
+      display: flex; flex-direction: column; gap: 3px;
+    }
+    #zoom-controls button {
+      width: 28px; height: 28px;
+      background: rgba(255,255,255,0.93); border: 1px solid #d8d5cf;
+      border-radius: 5px; cursor: pointer; color: #1a1a2e;
+      font-size: 1rem; line-height: 1; font-family: inherit;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      transition: background 0.1s;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #zoom-controls button:hover { background: #ece9e3; }
 
     /* ── Plot area ───────────────────────────────────── */
     .plot-wrap { flex: 1; position: relative; min-width: 0; min-height: 0; }
@@ -353,18 +401,20 @@
         <input type="range" id="k-slider" min="2" max="12" value="6" />
       </div>
 
+      <div id="feature-wrap" style="display:none">
+        <div class="sl">Features</div>
+        <div class="feature-grid" id="feature-grid"></div>
+      </div>
+
+      <div id="recalc-wrap" style="display:none">
+        <button id="recalc-btn">Recalculate map</button>
+        <div id="recalc-bar-wrap"><div id="recalc-bar"></div></div>
+      </div>
+
       <div id="terrain-wrap" style="display:none">
         <div class="sl">Terrain</div>
         <select id="terrain-select">
           <option value="">Off</option>
-          <option value="energy">Energy</option>
-          <option value="valence">Valence</option>
-          <option value="danceability">Danceability</option>
-          <option value="acousticness">Acousticness</option>
-          <option value="instrumentalness">Instrumentalness</option>
-          <option value="tempo">Tempo</option>
-          <option value="liveness">Liveness</option>
-          <option value="speechiness">Speechiness</option>
         </select>
       </div>
 
@@ -376,6 +426,11 @@
 
     <div class="plot-wrap">
       <div id="plot"></div>
+      <div id="zoom-controls">
+        <button id="zoom-in"    title="Zoom in">+</button>
+        <button id="zoom-out"   title="Zoom out">−</button>
+        <button id="zoom-reset" title="Reset view">⌖</button>
+      </div>
       <div id="pulse-ring"></div>
       <div id="terrain-legend">
         <div id="terrain-legend-label"></div>

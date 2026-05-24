@@ -6,10 +6,14 @@ const OTHER_OPACITY      = 0.55;
 const N_NEIGHBORS        = 15;
 const NEIGHBORHOOD_LABEL = "Neighborhood";
 
-const FEATURE_KEYS   = ["acousticness","danceability","energy","instrumentalness",
-                         "liveness","speechiness","valence","tempo"];
-const FEATURE_LABELS = ["Acousticness","Danceability","Energy","Instrumentalness",
-                         "Liveness","Speechiness","Valence","Tempo"];
+const ALL_FEATURE_KEYS   = ["acousticness","danceability","energy","instrumentalness",
+                            "liveness","speechiness","tempo","valence",
+                            "loudness"];
+const ALL_FEATURE_LABELS = ["Acousticness","Danceability","Energy","Instrumentalness",
+                            "Liveness","Speechiness","Tempo","Valence",
+                            "Loudness"];
+const DEFAULT_FEATURE_KEYS = ["acousticness","danceability","energy","instrumentalness",
+                              "liveness","speechiness","tempo","valence"];
 
 const GENRE_PALETTE = [
   "#4dabf7", "#ff6b6b", "#69db7c", "#cc5de8", "#ffa94d", "#38d9a9",
@@ -51,13 +55,25 @@ let tempoMin = 60, tempoMax = 200;
 let hasFeatureData = false;
 let currentK = 6;
 let inited = false;
-let terrainFeature = null;
-let contourCache   = {};
+let terrainFeature  = null;
+let contourCache    = {};
+let currentXRange   = null; // null = full data range; set when user zooms/pans
+let currentYRange   = null;
 let featureStats   = {}; // { [key]: { mean, std } } — matches pipeline StandardScaler
+let availableFeatures = new Set();
+let selectedFeatures  = new Set(DEFAULT_FEATURE_KEYS);
+let mapFeatureKeys    = [...DEFAULT_FEATURE_KEYS]; // features the current map was built with
+let loudnessMin = -60, loudnessMax = 0;
+let umapMod = null; // lazy-loaded umap-js
 
 // Focus mode: sonic neighbors / path
 let clickedIndices = [];       // [] | [i] | [i, j]
 let focusSet       = new Set();
+
+// ── Feature key helpers ───────────────────────────────────────────────────────
+
+function featureKeys() { return ALL_FEATURE_KEYS.filter(k => selectedFeatures.has(k)); }
+function featureLabelFor(k) { return ALL_FEATURE_LABELS[ALL_FEATURE_KEYS.indexOf(k)]; }
 
 // ── Size scaling ──────────────────────────────────────────────────────────────
 
@@ -95,6 +111,7 @@ function buildClusterLabels(records) {
 
 function buildClusterProfiles(records) {
   if (!hasFeatureData) return {};
+  const fkeys = featureKeys();
   const byCluster = {};
   for (const r of records) {
     const cid = r.artist_cluster;
@@ -102,13 +119,13 @@ function buildClusterProfiles(records) {
     byCluster[cid].push(r);
   }
   const globalMeans = {};
-  for (const f of FEATURE_KEYS) {
+  for (const f of fkeys) {
     globalMeans[f] = records.reduce((s, r) => s + (r[f] || 0), 0) / records.length;
   }
   const profiles = {};
   for (const [cid, recs] of Object.entries(byCluster)) {
     profiles[cid] = { _globalMeans: globalMeans };
-    for (const f of FEATURE_KEYS) {
+    for (const f of fkeys) {
       profiles[cid][f] = recs.reduce((s, r) => s + (r[f] || 0), 0) / recs.length;
     }
   }
@@ -133,7 +150,15 @@ function applyData(data) {
     const tempos = allRecords.map(r => r.tempo);
     tempoMin = Math.min(...tempos);
     tempoMax = Math.max(...tempos);
+    if (allRecords[0]?.loudness !== undefined) {
+      const ls = allRecords.map(r => r.loudness);
+      loudnessMin = Math.min(...ls);
+      loudnessMax = Math.max(...ls);
+    }
   }
+  availableFeatures = new Set(ALL_FEATURE_KEYS.filter(k => allRecords[0]?.[k] !== undefined));
+  selectedFeatures  = new Set([...DEFAULT_FEATURE_KEYS].filter(k => availableFeatures.has(k)));
+  mapFeatureKeys    = [...selectedFeatures]; // initial map was built with these features
 }
 
 // ── In-browser KMeans ─────────────────────────────────────────────────────────
@@ -182,13 +207,14 @@ function kmeans(points, k, seed = 42, maxIter = 300) {
 }
 
 function recomputeArtistClusters(k) {
-  // StandardScaler normalization over the 8 display features
-  const means = FEATURE_KEYS.map(f => allRecords.reduce((s, r) => s + (r[f] || 0), 0) / allRecords.length);
-  const stds  = FEATURE_KEYS.map((f, i) => {
+  const fkeys = featureKeys();
+  if (!fkeys.length) return;
+  const means = fkeys.map(f => allRecords.reduce((s, r) => s + (r[f] || 0), 0) / allRecords.length);
+  const stds  = fkeys.map((f, i) => {
     const v = allRecords.reduce((s, r) => s + ((r[f] || 0) - means[i]) ** 2, 0) / allRecords.length;
     return Math.sqrt(v) || 1;
   });
-  const normVec = r => FEATURE_KEYS.map((f, i) => ((r[f] || 0) - means[i]) / stds[i]);
+  const normVec = r => fkeys.map((f, i) => ((r[f] || 0) - means[i]) / stds[i]);
 
   // Group records by artist
   const byArtist = {};
@@ -200,7 +226,7 @@ function recomputeArtistClusters(k) {
   // Mean normalized feature vector per qualified artist
   const profiles = qualified.map(a => {
     const vecs = byArtist[a].map(normVec);
-    return FEATURE_KEYS.map((_, i) => vecs.reduce((s, v) => s + v[i], 0) / vecs.length);
+    return fkeys.map((_, i) => vecs.reduce((s, v) => s + v[i], 0) / vecs.length);
   });
 
   const { labels, centroids } = kmeans(profiles, k);
@@ -241,7 +267,7 @@ const TERRAIN_SIGMA = 3; // ±3σ maps to [0, 1]; clipped beyond that
 
 function computeFeatureStats() {
   featureStats = {};
-  for (const key of FEATURE_KEYS) {
+  for (const key of ALL_FEATURE_KEYS) {
     const vals = allRecords.map(r => r[key] ?? 0);
     const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
     const std  = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length) || 1;
@@ -312,7 +338,7 @@ function makeCustomdata(r) {
     title: r.title, artist: r.artist, play_count: r.play_count,
     color: getRecordColor(r),
     idx: r._idx,
-    feats: hasFeatureData ? FEATURE_KEYS.map(k => r[k]) : null,
+    feats: hasFeatureData ? featureKeys().map(k => r[k]) : null,
   };
 }
 
@@ -415,10 +441,11 @@ function makeLayout() {
   return {
     paper_bgcolor: "#f7f5f0", plot_bgcolor: "#f7f5f0",
     font: { color: "#1a1a2e", size: 11 },
-    xaxis: { range: xRange, showgrid: true, gridcolor: "#e8e5e0",
-             zeroline: false, showticklabels: false, fixedrange: true },
-    yaxis: { range: yRange, showgrid: true, gridcolor: "#e8e5e0",
-             zeroline: false, showticklabels: false, fixedrange: true },
+    xaxis: { range: currentXRange || xRange, showgrid: true, gridcolor: "#e8e5e0",
+             zeroline: false, showticklabels: false },
+    yaxis: { range: currentYRange || yRange, showgrid: true, gridcolor: "#e8e5e0",
+             zeroline: false, showticklabels: false },
+    dragmode: "pan",
     hovermode: "closest", showlegend: false,
     margin: { t: 10, r: 10, b: 10, l: 10 },
   };
@@ -437,10 +464,12 @@ function render() {
     `${allRecords.length.toLocaleString()} tracks`;
 
   if (!inited) {
-    Plotly.newPlot("plot", buildTraces(filtered), makeLayout(), { responsive: true, displayModeBar: false });
+    Plotly.newPlot("plot", buildTraces(filtered), makeLayout(),
+      { responsive: true, displayModeBar: false, scrollZoom: true });
     inited = true;
     initHover();
     initClick();
+    initZoom();
   } else {
     Plotly.react("plot", buildTraces(filtered), makeLayout());
   }
@@ -451,7 +480,10 @@ function render() {
 
 function normalizeFeature(key, val) {
   if (val == null) return 0;
-  if (key === "tempo") return Math.max(0, Math.min(1, (val - tempoMin) / (tempoMax - tempoMin || 1)));
+  if (key === "tempo")         return Math.max(0, Math.min(1, (val - tempoMin) / (tempoMax - tempoMin || 1)));
+  if (key === "loudness")      return Math.max(0, Math.min(1, (val - loudnessMin) / (loudnessMax - loudnessMin || 1)));
+  if (key === "timeSignature") return Math.max(0, Math.min(1, (val - 1) / 6));
+  if (key === "key")           return val / 11;
   return Math.max(0, Math.min(1, val));
 }
 
@@ -459,12 +491,13 @@ function renderFeatureBars(containerId, feats, globalMeans, accentColor) {
   const el = document.getElementById(containerId);
   if (!hasFeatureData || !feats) { el.innerHTML = ""; return; }
   el.style.setProperty("--bar-color", accentColor || "#999");
-  el.innerHTML = FEATURE_KEYS.map((k, i) => {
+  const keys = featureKeys();
+  el.innerHTML = keys.map((k, i) => {
     const pct = (normalizeFeature(k, feats[i]) * 100).toFixed(0);
     const avgPct = globalMeans
       ? (normalizeFeature(k, globalMeans[k]) * 100).toFixed(0) : null;
     return `<div class="feat-row">
-      <span class="feat-lbl">${FEATURE_LABELS[i]}</span>
+      <span class="feat-lbl">${featureLabelFor(k)}</span>
       <div class="feat-bar-bg">
         <div class="feat-bar-fill" style="width:${pct}%"></div>
         ${avgPct !== null ? `<div class="feat-bar-avg" style="left:${avgPct}%"></div>` : ""}
@@ -531,6 +564,43 @@ function initClick() {
   });
 }
 
+// ── Zoom & pan ────────────────────────────────────────────────────────────────
+
+function initZoom() {
+  document.getElementById("plot").on("plotly_relayout", e => {
+    if (e["xaxis.range[0]"] !== undefined) {
+      currentXRange = [+e["xaxis.range[0]"], +e["xaxis.range[1]"]];
+      currentYRange = [+e["yaxis.range[0]"], +e["yaxis.range[1]"]];
+    } else if (e["xaxis.autorange"] || e["yaxis.autorange"]) {
+      currentXRange = null;
+      currentYRange = null;
+    }
+  });
+}
+
+function zoomBy(factor) {
+  const la    = document.getElementById("plot")._fullLayout;
+  const xMid  = (la.xaxis.range[0] + la.xaxis.range[1]) / 2;
+  const yMid  = (la.yaxis.range[0] + la.yaxis.range[1]) / 2;
+  const xHalf = (la.xaxis.range[1] - la.xaxis.range[0]) / 2 * factor;
+  const yHalf = (la.yaxis.range[1] - la.yaxis.range[0]) / 2 * factor;
+  Plotly.relayout("plot", {
+    "xaxis.range[0]": xMid - xHalf, "xaxis.range[1]": xMid + xHalf,
+    "yaxis.range[0]": yMid - yHalf, "yaxis.range[1]": yMid + yHalf,
+  });
+}
+
+document.getElementById("zoom-in").addEventListener("click",  () => zoomBy(0.6));
+document.getElementById("zoom-out").addEventListener("click", () => zoomBy(1 / 0.6));
+document.getElementById("zoom-reset").addEventListener("click", () => {
+  currentXRange = null;
+  currentYRange = null;
+  Plotly.relayout("plot", {
+    "xaxis.range[0]": xRange[0], "xaxis.range[1]": xRange[1],
+    "yaxis.range[0]": yRange[0], "yaxis.range[1]": yRange[1],
+  });
+});
+
 // ── Neighborhood info ─────────────────────────────────────────────────────────
 
 function updateNeighborhoodInfo() {
@@ -547,7 +617,7 @@ function updateNeighborhoodInfo() {
 
   panel.style.display = "block";
   const color = GENRE_PALETTE[selectedGroup % GENRE_PALETTE.length];
-  const feats = FEATURE_KEYS.map(k => profile[k]);
+  const feats = featureKeys().map(k => profile[k]);
   renderFeatureBars("ni-bars", feats, profile._globalMeans, color);
 }
 
@@ -647,9 +717,8 @@ document.getElementById("k-slider").addEventListener("input", function() {
 function updateTerrainLegend(featureKey) {
   const legend = document.getElementById("terrain-legend");
   if (!featureKey) { legend.classList.remove("visible"); return; }
-  const idx = FEATURE_KEYS.indexOf(featureKey);
   document.getElementById("terrain-legend-label").textContent =
-    idx >= 0 ? FEATURE_LABELS[idx] : featureKey;
+    featureLabelFor(featureKey) || featureKey;
   const gradient = TOPO_COLORSCALE
     .map(([stop, color]) => `${color} ${(stop * 100).toFixed(0)}%`)
     .join(", ");
@@ -678,6 +747,150 @@ document.getElementById("info-overlay").addEventListener("click", function(e) {
   if (e.target === this) this.classList.remove("open");
 });
 
+// ── Feature selector ─────────────────────────────────────────────────────────
+
+function syncTerrainOptions() {
+  const sel = document.getElementById("terrain-select");
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">Off</option>' +
+    featureKeys().map(k => `<option value="${k}">${featureLabelFor(k)}</option>`).join("");
+  // Restore previous selection if still valid, else reset
+  if (prev && featureKeys().includes(prev)) {
+    sel.value = prev;
+  } else if (prev) {
+    sel.value = "";
+    terrainFeature = null;
+    updateTerrainLegend(null);
+  }
+}
+
+function buildFeatureSelector() {
+  const wrap = document.getElementById("feature-wrap");
+  const grid = document.getElementById("feature-grid");
+  if (!hasFeatureData || availableFeatures.size === 0) { wrap.style.display = "none"; return; }
+  wrap.style.display = "block";
+
+  grid.innerHTML = ALL_FEATURE_KEYS
+    .filter(k => availableFeatures.has(k))
+    .map(k => {
+      const label   = featureLabelFor(k);
+      const checked = selectedFeatures.has(k) ? "checked" : "";
+      return `<label class="feat-chip">
+        <input type="checkbox" value="${k}" ${checked}>
+        <span>${label}</span>
+      </label>`;
+    }).join("");
+
+  syncTerrainOptions();
+
+  grid.querySelectorAll("input[type=checkbox]").forEach(cb => {
+    cb.addEventListener("change", () => {
+      if (cb.checked) {
+        selectedFeatures.add(cb.value);
+      } else {
+        if (selectedFeatures.size <= 1) { cb.checked = true; return; }
+        selectedFeatures.delete(cb.value);
+      }
+      onFeaturesChanged();
+    });
+  });
+}
+
+function onFeaturesChanged() {
+  computeFeatureStats();
+  contourCache = {};
+  recomputeArtistClusters(currentK);
+  clusterLabels   = buildClusterLabels(allRecords);
+  clusterProfiles = buildClusterProfiles(allRecords);
+  syncTerrainOptions();
+  checkMapStaleness();
+  render();
+}
+
+// ── Map recalculation ─────────────────────────────────────────────────────────
+
+function checkMapStaleness() {
+  const fkeys = featureKeys();
+  const same  = fkeys.length === mapFeatureKeys.length &&
+                fkeys.every((k, i) => k === mapFeatureKeys[i]);
+  document.getElementById("recalc-wrap").style.display = same ? "none" : "block";
+}
+
+function standardScale(records, keys) {
+  const n = records.length;
+  const means = keys.map(k => records.reduce((s, r) => s + (r[k] ?? 0), 0) / n);
+  const stds  = keys.map((k, i) => {
+    const v = records.reduce((s, r) => s + ((r[k] ?? 0) - means[i]) ** 2, 0) / n;
+    return Math.sqrt(v) || 1;
+  });
+  return records.map(r => keys.map((k, i) => ((r[k] ?? 0) - means[i]) / stds[i]));
+}
+
+async function recalculateMap() {
+  const fkeys   = featureKeys();
+  const btn     = document.getElementById("recalc-btn");
+  const barWrap = document.getElementById("recalc-bar-wrap");
+  const bar     = document.getElementById("recalc-bar");
+
+  btn.disabled    = true;
+  btn.textContent = "Recalculating…";
+  barWrap.style.display = "block";
+  bar.style.width = "0%";
+
+  try {
+    const normalized = standardScale(allRecords, fkeys);
+    const nEpochs    = 100;
+
+    if (!umapMod) umapMod = await import("https://esm.sh/umap-js@1.3.3");
+    const { UMAP } = umapMod;
+
+    const umap = new UMAP({
+      nNeighbors: 10,
+      minDist: 0.1,
+      nComponents: 2,
+      nEpochs,
+      random: seededRng(42),
+    });
+
+    const embedding = await umap.fitAsync(normalized, async (epoch) => {
+      bar.style.width = `${Math.round(((epoch + 1) / nEpochs) * 100)}%`;
+      if (epoch % 5 === 0) await new Promise(r => setTimeout(r, 0));
+    });
+
+    for (let i = 0; i < allRecords.length; i++) {
+      allRecords[i].x = embedding[i][0];
+      allRecords[i].y = embedding[i][1];
+    }
+    xRange = computeRange(allRecords.map(r => r.x));
+    yRange = computeRange(allRecords.map(r => r.y));
+    currentXRange = null;
+    currentYRange = null;
+    contourCache = {};
+    mapFeatureKeys = [...fkeys];
+
+    clickedIndices = [];
+    focusSet = new Set();
+    document.getElementById("hover-panel").classList.remove("has-data");
+
+    recomputeArtistClusters(currentK);
+    clusterLabels   = buildClusterLabels(allRecords);
+    clusterProfiles = buildClusterProfiles(allRecords);
+
+    barWrap.style.display = "none";
+    document.getElementById("recalc-wrap").style.display = "none";
+    render();
+  } catch (err) {
+    btn.textContent = "Recalculate map";
+    barWrap.style.display = "none";
+    console.error("UMAP recalculation failed:", err);
+  }
+
+  btn.disabled    = false;
+  btn.textContent = "Recalculate map";
+}
+
+document.getElementById("recalc-btn").addEventListener("click", recalculateMap);
+
 // ── Bootstrap ──────────────────────────────────────────────────────────────────
 
 fetch(DATA_PATH)
@@ -697,7 +910,10 @@ fetch(DATA_PATH)
     document.getElementById("loading").style.display = "none";
     if (hasFeatureData) document.getElementById("terrain-wrap").style.display = "block";
     buildSidebar();
+    buildFeatureSelector();
     render();
+    // Warm up umap-js in the background so first Recalculate is fast
+    if (hasFeatureData) import("https://esm.sh/umap-js@1.3.3").then(m => { umapMod = m; }).catch(() => {});
   })
   .catch(err => {
     document.getElementById("loading").innerHTML =

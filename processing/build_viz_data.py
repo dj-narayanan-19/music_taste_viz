@@ -58,6 +58,7 @@ TSNE_RANDOM_STATE = 42
 DISPLAY_FEATURES = [
     "acousticness", "danceability", "energy", "instrumentalness",
     "liveness", "speechiness", "valence", "tempo",
+    "loudness",
 ]
 
 HDBSCAN_MIN_CLUSTER_SIZE = 10

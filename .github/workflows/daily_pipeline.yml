@@ -38,7 +38,7 @@ jobs:
           EOF
 
       - name: Run pipeline
-        run: python run_pipeline.py TheRedBaron1999 --min-plays 10 --limit 2000
+        run: python run_pipeline.py TheRedBaron1999 --min-plays 10 --limit 2000 --skip-timestamps
 
       - name: Commit updated caches and viz data
         run: |
