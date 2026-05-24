@@ -16,8 +16,8 @@ const DEFAULT_FEATURE_KEYS = ["acousticness","danceability","energy","instrument
                               "liveness","speechiness","tempo","valence"];
 
 const GENRE_PALETTE = [
-  "#4dabf7", "#ff6b6b", "#69db7c", "#cc5de8", "#ffa94d", "#38d9a9",
-  "#f783ac", "#a9e34b", "#74c0fc", "#ffd43b", "#e599f7", "#63e6be",
+  "#1971c2", "#c92a2a", "#2f9e44", "#7048e8", "#e67700", "#0c8599",
+  "#a61e4d", "#5c940d", "#3b5bdb", "#d9480f", "#862e9c", "#087f5b",
 ];
 
 // Topographic colorscale: water → lowlands → midlands → highlands → peaks
@@ -33,8 +33,8 @@ const TOPO_COLORSCALE = [
 function makeArtistPalette(n) {
   return Array.from({ length: n }, (_, i) => {
     const h = (i * 137.508) % 360;
-    const s = 72 + (i % 3) * 8;
-    const l = 58 + (i % 3) * 7;
+    const s = 68 + (i % 3) * 8;
+    const l = 36 + (i % 3) * 6;
     return `hsl(${h.toFixed(1)},${s}%,${l}%)`;
   });
 }
@@ -57,8 +57,6 @@ let currentK = 6;
 let inited = false;
 let terrainFeature  = null;
 let contourCache    = {};
-let currentXRange   = null; // null = full data range; set when user zooms/pans
-let currentYRange   = null;
 let featureStats   = {}; // { [key]: { mean, std } } — matches pipeline StandardScaler
 let availableFeatures = new Set();
 let selectedFeatures  = new Set(DEFAULT_FEATURE_KEYS);
@@ -78,7 +76,7 @@ function featureLabelFor(k) { return ALL_FEATURE_LABELS[ALL_FEATURE_KEYS.indexOf
 // ── Size scaling ──────────────────────────────────────────────────────────────
 
 function scaleSize(s) {
-  return 4 + ((s - globalMinSize) / (globalMaxSize - globalMinSize || 1)) * 20;
+  return 5 + ((s - globalMinSize) / (globalMaxSize - globalMinSize || 1)) * 20;
 }
 
 // ── Color helpers ─────────────────────────────────────────────────────────────
@@ -132,7 +130,7 @@ function buildClusterProfiles(records) {
   return profiles;
 }
 
-function computeRange(vals, pad = 0.08) {
+function computeRange(vals, pad = 0.02) {
   const mn = Math.min(...vals), mx = Math.max(...vals);
   const d = (mx - mn) * pad;
   return [mn - d, mx + d];
@@ -441,11 +439,11 @@ function makeLayout() {
   return {
     paper_bgcolor: "#f7f5f0", plot_bgcolor: "#f7f5f0",
     font: { color: "#1a1a2e", size: 11 },
-    xaxis: { range: currentXRange || xRange, showgrid: true, gridcolor: "#e8e5e0",
-             zeroline: false, showticklabels: false },
-    yaxis: { range: currentYRange || yRange, showgrid: true, gridcolor: "#e8e5e0",
-             zeroline: false, showticklabels: false },
-    dragmode: "pan",
+    xaxis: { range: xRange, showgrid: true, gridcolor: "#e8e5e0",
+             zeroline: false, showticklabels: false, fixedrange: true },
+    yaxis: { range: yRange, showgrid: true, gridcolor: "#e8e5e0",
+             zeroline: false, showticklabels: false, fixedrange: true },
+    dragmode: false,
     hovermode: "closest", showlegend: false,
     margin: { t: 10, r: 10, b: 10, l: 10 },
   };
@@ -465,11 +463,10 @@ function render() {
 
   if (!inited) {
     Plotly.newPlot("plot", buildTraces(filtered), makeLayout(),
-      { responsive: true, displayModeBar: false, scrollZoom: true });
+      { responsive: true, displayModeBar: false });
     inited = true;
     initHover();
     initClick();
-    initZoom();
   } else {
     Plotly.react("plot", buildTraces(filtered), makeLayout());
   }
@@ -546,60 +543,46 @@ function initHover() {
 
 // ── Click / focus ─────────────────────────────────────────────────────────────
 
-function initClick() {
-  document.getElementById("plot").on("plotly_click", function(data) {
-    if (window.matchMedia("(max-width: 640px)").matches) return;
-    const idx = data.points[0].customdata.idx;
+function clearFocus() {
+  if (!clickedIndices.length) return;
+  clickedIndices = [];
+  focusSet = new Set();
+  render();
+  updateClickHint();
+}
 
+function initClick() {
+  const plotDiv = document.getElementById("plot");
+  let pointJustClicked = false;
+
+  plotDiv.on("plotly_click", function(data) {
+    if (window.matchMedia("(max-width: 640px)").matches) return;
+    pointJustClicked = true;
+
+    if (!data.points || !data.points.length) { clearFocus(); return; }
+
+    const idx = data.points[0].customdata.idx;
     if (clickedIndices.length === 1 && clickedIndices[0] === idx) {
-      clickedIndices = [];
-      focusSet = new Set();
+      clearFocus();
     } else {
       clickedIndices = [idx];
       focusSet = new Set(getSonicNeighbors(idx, N_NEIGHBORS));
-    }
-
-    render();
-    updateClickHint();
-  });
-}
-
-// ── Zoom & pan ────────────────────────────────────────────────────────────────
-
-function initZoom() {
-  document.getElementById("plot").on("plotly_relayout", e => {
-    if (e["xaxis.range[0]"] !== undefined) {
-      currentXRange = [+e["xaxis.range[0]"], +e["xaxis.range[1]"]];
-      currentYRange = [+e["yaxis.range[0]"], +e["yaxis.range[1]"]];
-    } else if (e["xaxis.autorange"] || e["yaxis.autorange"]) {
-      currentXRange = null;
-      currentYRange = null;
+      render();
+      updateClickHint();
     }
   });
-}
 
-function zoomBy(factor) {
-  const la    = document.getElementById("plot")._fullLayout;
-  const xMid  = (la.xaxis.range[0] + la.xaxis.range[1]) / 2;
-  const yMid  = (la.yaxis.range[0] + la.yaxis.range[1]) / 2;
-  const xHalf = (la.xaxis.range[1] - la.xaxis.range[0]) / 2 * factor;
-  const yHalf = (la.yaxis.range[1] - la.yaxis.range[0]) / 2 * factor;
-  Plotly.relayout("plot", {
-    "xaxis.range[0]": xMid - xHalf, "xaxis.range[1]": xMid + xHalf,
-    "yaxis.range[0]": yMid - yHalf, "yaxis.range[1]": yMid + yHalf,
+  // Fallback: native click fires before plotly_click, so defer the check.
+  // If plotly_click didn't set the flag by then, the click was on empty space.
+  plotDiv.addEventListener("click", () => {
+    if (window.matchMedia("(max-width: 640px)").matches) return;
+    setTimeout(() => {
+      if (!pointJustClicked) clearFocus();
+      pointJustClicked = false;
+    }, 0);
   });
 }
 
-document.getElementById("zoom-in").addEventListener("click",  () => zoomBy(0.6));
-document.getElementById("zoom-out").addEventListener("click", () => zoomBy(1 / 0.6));
-document.getElementById("zoom-reset").addEventListener("click", () => {
-  currentXRange = null;
-  currentYRange = null;
-  Plotly.relayout("plot", {
-    "xaxis.range[0]": xRange[0], "xaxis.range[1]": xRange[1],
-    "yaxis.range[0]": yRange[0], "yaxis.range[1]": yRange[1],
-  });
-});
 
 // ── Neighborhood info ─────────────────────────────────────────────────────────
 
@@ -846,7 +829,7 @@ async function recalculateMap() {
 
     const umap = new UMAP({
       nNeighbors: 10,
-      minDist: 0.1,
+      minDist: 0.05,
       nComponents: 2,
       nEpochs,
       random: seededRng(42),
@@ -863,8 +846,6 @@ async function recalculateMap() {
     }
     xRange = computeRange(allRecords.map(r => r.x));
     yRange = computeRange(allRecords.map(r => r.y));
-    currentXRange = null;
-    currentYRange = null;
     contourCache = {};
     mapFeatureKeys = [...fkeys];
 
