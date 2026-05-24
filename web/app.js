@@ -1,8 +1,8 @@
 const DATA_PATH = "../data/processed/viz_data.json";
 
 const TOP_N_ARTISTS      = 50;
-const OTHER_COLOR        = "#8a8680";
-const OTHER_OPACITY      = 0.55;
+const OTHER_COLOR        = "#4a4a5a";
+const OTHER_OPACITY      = 0.60;
 const N_NEIGHBORS        = 15;
 const NEIGHBORHOOD_LABEL = "Neighborhood";
 
@@ -16,25 +16,24 @@ const DEFAULT_FEATURE_KEYS = ["acousticness","danceability","energy","instrument
                               "liveness","speechiness","tempo","valence"];
 
 const GENRE_PALETTE = [
-  "#1971c2", "#c92a2a", "#2f9e44", "#7048e8", "#e67700", "#0c8599",
-  "#a61e4d", "#5c940d", "#3b5bdb", "#d9480f", "#862e9c", "#087f5b",
+  "#00eaff", "#ff003c", "#00ff88", "#bf00ff", "#ff9900", "#00ffcc",
+  "#ff007f", "#c8ff00", "#00eaff", "#ff003c", "#00ff88", "#bf00ff",
 ];
 
-// Topographic colorscale: water → lowlands → midlands → highlands → peaks
+// Sunset colorscale: deep night → violet → red → orange → cream
 const TOPO_COLORSCALE = [
-  [0,    "#5baed6"],
-  [0.18, "#74c476"],
-  [0.38, "#d4c44a"],
-  [0.60, "#d47820"],
-  [0.80, "#a05040"],
-  [1,    "#e8d0c8"],
+  [0,    "#1a0533"],
+  [0.25, "#5c1a6e"],
+  [0.5,  "#c0394b"],
+  [0.75, "#f28a30"],
+  [1,    "#fde8c8"],
 ];
 
 function makeArtistPalette(n) {
   return Array.from({ length: n }, (_, i) => {
     const h = (i * 137.508) % 360;
-    const s = 68 + (i % 3) * 8;
-    const l = 36 + (i % 3) * 6;
+    const s = 95 + (i % 2) * 5;
+    const l = 52 + (i % 3) * 6;
     return `hsl(${h.toFixed(1)},${s}%,${l}%)`;
   });
 }
