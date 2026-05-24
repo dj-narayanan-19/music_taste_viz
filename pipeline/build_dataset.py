@@ -30,13 +30,26 @@ def load_csv(path: Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
+def load_timestamps(path: Path) -> dict:
+    """Load track_timestamps.csv into a dict keyed by (artist_lower, title_lower)."""
+    if not path.exists():
+        return {}
+    with open(path, encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    index = {(r["artist_lower"], r["title_lower"]): r for r in rows}
+    logging.info(f"Loaded {len(index):,} track timestamp entries from {path.name}")
+    return index
+
+
 def join_datasets(
     track_counts: list[dict],
     audio_features: list[dict],
+    timestamps: dict,
 ) -> tuple[list[dict], int]:
     """
     Inner-join: iterate audio_features (the smaller set) and look up play
     counts from track_counts. Tracks without audio features are excluded.
+    Timestamps are left-joined — missing entries leave year fields empty.
     Returns (joined rows, number of audio_features rows skipped due to missing
     feature values or no matching play-count entry).
     """
@@ -66,12 +79,16 @@ def join_datasets(
         if skip:
             skipped += 1
             continue
+        ts = timestamps.get(key, {})
         joined.append({
-            "artist": feat["artist"],
-            "title": feat["title"],
+            "artist":     feat["artist"],
+            "title":      feat["title"],
             "play_count": int(counts["play_count"]),
             "spotify_id": feat["spotify_id"],
             **feature_vals,
+            "first_year": ts.get("first_year", ""),
+            "last_year":  ts.get("last_year", ""),
+            "peak_year":  ts.get("peak_year", ""),
         })
 
     return joined, skipped
@@ -79,7 +96,11 @@ def join_datasets(
 
 def save_dataset(rows: list[dict], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["artist", "title", "play_count", "spotify_id"] + AUDIO_FEATURE_COLS
+    fieldnames = (
+        ["artist", "title", "play_count", "spotify_id"]
+        + AUDIO_FEATURE_COLS
+        + ["first_year", "last_year", "peak_year"]
+    )
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -99,7 +120,8 @@ def main() -> None:
     audio_features = load_csv(args.features)
     logging.info(f"Loaded {len(track_counts):,} tracks (Last.fm) and {len(audio_features):,} tracks (Soundcharts)")
 
-    joined, skipped = join_datasets(track_counts, audio_features)
+    timestamps = load_timestamps(DATA_RAW_DIR / "track_timestamps.csv")
+    joined, skipped = join_datasets(track_counts, audio_features, timestamps)
     logging.info(f"Joined: {len(joined):,} tracks, {skipped:,} skipped (incomplete features)")
 
     save_dataset(joined, args.output)

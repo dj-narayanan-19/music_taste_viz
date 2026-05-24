@@ -68,6 +68,16 @@
     .gcluster-names .gname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .gsec { font-size: 0.62rem; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+    /* ── Terrain select ──────────────────────────────── */
+    #terrain-select {
+      width: 100%; padding: 5px 7px;
+      font-size: 0.7rem; font-family: inherit;
+      border: 1px solid #d0cec8; border-radius: 5px;
+      background: #f7f5f0; color: #333; cursor: pointer;
+      appearance: none; -webkit-appearance: none;
+    }
+    #terrain-select:focus { outline: none; border-color: #1a1a2e; }
+
     /* ── k slider (neighborhood mode only) ──────────── */
     #k-slider-wrap { flex-shrink: 0; }
     #k-slider-wrap .sl { margin-bottom: 6px; }
@@ -81,6 +91,28 @@
       padding-top: 14px;
       border-top: 1px solid #e8e5e0;
       flex-shrink: 0;
+    }
+
+    /* ── Terrain legend ──────────────────────────────────── */
+    #terrain-legend {
+      position: absolute; bottom: 16px; left: 16px;
+      background: rgba(255,255,255,0.93);
+      border: 1px solid #d8d5cf; border-radius: 7px;
+      padding: 9px 12px; min-width: 140px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.09);
+      pointer-events: none; display: none;
+    }
+    #terrain-legend.visible { display: block; }
+    #terrain-legend-label {
+      font-size: 0.62rem; font-weight: 600; color: #555;
+      text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 6px;
+    }
+    #terrain-legend-bar {
+      height: 10px; border-radius: 3px;
+    }
+    #terrain-legend-ticks {
+      display: flex; justify-content: space-between;
+      margin-top: 4px; font-size: 0.58rem; color: #aaa;
     }
 
     /* ── Feature bars (shared by hover panel + neighborhood info) ─ */
@@ -178,6 +210,73 @@
       font-size: 0.72rem; cursor: pointer; font-family: inherit;
     }
     #info-close:hover { background: #2e2e50; }
+
+    /* ── FAB (mobile only) ───────────────────────────────── */
+    #controls-fab {
+      display: none;
+      position: fixed; bottom: 20px; right: 16px; z-index: 30;
+      width: 46px; height: 46px; border-radius: 50%;
+      background: #1a1a2e; color: #f7f5f0; border: none;
+      font-size: 1.25rem; cursor: pointer;
+      align-items: center; justify-content: center;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.28);
+    }
+
+    /* ── Drawer backdrop (mobile only) ──────────────────── */
+    #drawer-backdrop {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.32); z-index: 40;
+    }
+    #drawer-backdrop.open { display: block; }
+
+    /* ── Drawer close button ─────────────────────────────── */
+    #drawer-close {
+      display: none; position: absolute; top: 12px; right: 14px;
+      background: none; border: none; font-size: 1rem; color: #888;
+      cursor: pointer; padding: 4px 8px; font-family: inherit; line-height: 1;
+    }
+
+    /* ── Drawer handle bar ───────────────────────────────── */
+    #drawer-handle {
+      display: none; width: 36px; height: 4px; background: #d0cec8;
+      border-radius: 2px; margin: -4px auto 14px; flex-shrink: 0;
+    }
+
+    /* ── Mobile overrides ────────────────────────────────── */
+    @media (max-width: 640px) {
+      .subtitle { display: none; }
+      header { padding: 8px 12px; }
+
+      aside {
+        position: fixed; inset-x: 0; bottom: 0;
+        width: 100%; max-height: 75vh;
+        border-right: none;
+        border-top: 1px solid #d8d5cf;
+        border-radius: 16px 16px 0 0;
+        transform: translateY(100%);
+        transition: transform 0.28s ease;
+        z-index: 50; background: #f7f5f0;
+        padding: 16px 16px 32px; gap: 14px;
+        box-shadow: 0 -4px 24px rgba(0,0,0,0.12);
+        overflow-y: auto;
+      }
+      aside.open { transform: translateY(0); }
+
+      #drawer-handle { display: block; }
+      #drawer-close  { display: block; }
+      #controls-fab  { display: flex; }
+
+      #hover-panel  { display: none !important; }
+      #pulse-ring   { display: none !important; }
+
+      #info-overlay { align-items: flex-end; justify-content: center; }
+      #info-modal {
+        margin: 0; max-width: 100%; width: 100%;
+        border-radius: 16px 16px 0 0;
+        border-bottom: none; border-left: none; border-right: none;
+        max-height: 82vh; overflow-y: auto;
+      }
+    }
   </style>
 </head>
 <body>
@@ -216,6 +315,11 @@
       </div>
 
       <div class="info-section">
+        <h3>Terrain</h3>
+        <p>Select a feature in the bottom left corner to color in a terrain feature map. Elevation coloring is based on a region's average score in that feature. A legend is in the bottom left.</p>
+      </div>
+
+      <div class="info-section">
         <h3>Sonic neighbors</h3>
         <p>Click any song to highlight its 15 most sonically similar neighbors. Click it again to clear.</p>
       </div>
@@ -224,8 +328,13 @@
     </div>
   </div>
 
+  <button id="controls-fab" aria-label="Open controls" aria-expanded="false">&#8801;</button>
+  <div id="drawer-backdrop"></div>
+
   <div class="body">
     <aside>
+      <div id="drawer-handle"></div>
+      <button id="drawer-close" aria-label="Close controls">&#x2715;</button>
       <div>
         <div class="sl">Color by</div>
         <div class="mode-sw">
@@ -244,6 +353,21 @@
         <input type="range" id="k-slider" min="2" max="12" value="6" />
       </div>
 
+      <div id="terrain-wrap" style="display:none">
+        <div class="sl">Terrain</div>
+        <select id="terrain-select">
+          <option value="">Off</option>
+          <option value="energy">Energy</option>
+          <option value="valence">Valence</option>
+          <option value="danceability">Danceability</option>
+          <option value="acousticness">Acousticness</option>
+          <option value="instrumentalness">Instrumentalness</option>
+          <option value="tempo">Tempo</option>
+          <option value="liveness">Liveness</option>
+          <option value="speechiness">Speechiness</option>
+        </select>
+      </div>
+
       <div id="neighborhood-info">
         <div class="sl">This Neighborhood</div>
         <div id="ni-bars"></div>
@@ -253,6 +377,11 @@
     <div class="plot-wrap">
       <div id="plot"></div>
       <div id="pulse-ring"></div>
+      <div id="terrain-legend">
+        <div id="terrain-legend-label"></div>
+        <div id="terrain-legend-bar"></div>
+        <div id="terrain-legend-ticks"><span>Low</span><span>High</span></div>
+      </div>
       <div id="hover-panel">
         <div class="hp-hint">Hover over a point</div>
         <div class="hp-content">
@@ -270,5 +399,25 @@
   </div>
 
   <script src="app.js"></script>
+  <script>
+    const isMobile = () => window.matchMedia("(max-width: 640px)").matches;
+
+    function openDrawer() {
+      document.querySelector("aside").classList.add("open");
+      document.getElementById("drawer-backdrop").classList.add("open");
+      document.getElementById("controls-fab").setAttribute("aria-expanded", "true");
+    }
+    function closeDrawer() {
+      document.querySelector("aside").classList.remove("open");
+      document.getElementById("drawer-backdrop").classList.remove("open");
+      document.getElementById("controls-fab").setAttribute("aria-expanded", "false");
+    }
+
+    document.getElementById("controls-fab").addEventListener("click", () => {
+      document.querySelector("aside").classList.contains("open") ? closeDrawer() : openDrawer();
+    });
+    document.getElementById("drawer-backdrop").addEventListener("click", closeDrawer);
+    document.getElementById("drawer-close").addEventListener("click", closeDrawer);
+  </script>
 </body>
 </html>

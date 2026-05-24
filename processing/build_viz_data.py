@@ -242,6 +242,11 @@ def build_viz_records(
         for f in DISPLAY_FEATURES:
             if f in row:
                 rec[f] = round(float(row[f]), 4)
+        # Year fields — pass through as int if present, omit if not
+        for f in ("first_year", "last_year", "peak_year"):
+            val = row.get(f)
+            if val is not None and val != "":
+                rec[f] = int(val)
         records.append(rec)
     return records
 

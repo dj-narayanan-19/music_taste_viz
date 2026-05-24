@@ -16,6 +16,16 @@ const GENRE_PALETTE = [
   "#f783ac", "#a9e34b", "#74c0fc", "#ffd43b", "#e599f7", "#63e6be",
 ];
 
+// Topographic colorscale: water → lowlands → midlands → highlands → peaks
+const TOPO_COLORSCALE = [
+  [0,    "#5baed6"],
+  [0.18, "#74c476"],
+  [0.38, "#d4c44a"],
+  [0.60, "#d47820"],
+  [0.80, "#a05040"],
+  [1,    "#e8d0c8"],
+];
+
 function makeArtistPalette(n) {
   return Array.from({ length: n }, (_, i) => {
     const h = (i * 137.508) % 360;
@@ -41,6 +51,9 @@ let tempoMin = 60, tempoMax = 200;
 let hasFeatureData = false;
 let currentK = 6;
 let inited = false;
+let terrainFeature = null;
+let contourCache   = {};
+let featureStats   = {}; // { [key]: { mean, std } } — matches pipeline StandardScaler
 
 // Focus mode: sonic neighbors / path
 let clickedIndices = [];       // [] | [i] | [i, j]
@@ -222,6 +235,76 @@ function getSonicNeighbors(idx, n) {
     .map(x => x.i);
 }
 
+// ── Feature z-score stats (mirrors pipeline StandardScaler) ──────────────────
+
+const TERRAIN_SIGMA = 3; // ±3σ maps to [0, 1]; clipped beyond that
+
+function computeFeatureStats() {
+  featureStats = {};
+  for (const key of FEATURE_KEYS) {
+    const vals = allRecords.map(r => r[key] ?? 0);
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const std  = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length) || 1;
+    featureStats[key] = { mean, std };
+  }
+}
+
+function normalizeForTerrain(key, val) {
+  const { mean, std } = featureStats[key] || { mean: 0, std: 1 };
+  const z = (val - mean) / std;
+  return Math.max(0, Math.min(1, (z + TERRAIN_SIGMA) / (2 * TERRAIN_SIGMA)));
+}
+
+// ── Terrain contour ───────────────────────────────────────────────────────────
+
+function buildContourData(featureKey) {
+  const GRID = 50;
+  const xStep = (xRange[1] - xRange[0]) / GRID;
+  const yStep = (yRange[1] - yRange[0]) / GRID;
+  const xGrid = Array.from({ length: GRID }, (_, i) => xRange[0] + (i + 0.5) * xStep);
+  const yGrid = Array.from({ length: GRID }, (_, j) => yRange[0] + (j + 0.5) * yStep);
+  // Inverse-distance-weighting (p=2) over all songs per grid cell
+  const raw = yGrid.map(gy =>
+    xGrid.map(gx => {
+      let wSum = 0, vSum = 0;
+      for (const r of allRecords) {
+        const d2 = (r.x - gx) ** 2 + (r.y - gy) ** 2;
+        const w  = d2 < 1e-10 ? 1e10 : 1 / d2;
+        wSum += w;
+        vSum += w * normalizeForTerrain(featureKey, r[featureKey] ?? 0);
+      }
+      return vSum / wSum;
+    })
+  );
+
+  // IDW averaging compresses values toward the mean — stretch the interpolated
+  // grid's actual range to [0,1] so the full colorscale is always used.
+  const flat = raw.flat();
+  const gMin = Math.min(...flat);
+  const gMax = Math.max(...flat);
+  const span = gMax - gMin || 1;
+  const zMatrix = raw.map(row => row.map(v => (v - gMin) / span));
+
+  return { xGrid, yGrid, zMatrix };
+}
+
+function makeContourTrace(featureKey) {
+  if (!hasFeatureData || !featureKey) return null;
+  if (!contourCache[featureKey]) contourCache[featureKey] = buildContourData(featureKey);
+  const { xGrid, yGrid, zMatrix } = contourCache[featureKey];
+  return {
+    type: "contour",
+    x: xGrid, y: yGrid, z: zMatrix,
+    colorscale: TOPO_COLORSCALE,
+    showscale: false,
+    hoverinfo: "skip",
+    opacity: 0.72,
+    zmin: 0, zmax: 1,
+    contours: { coloring: "heatmap", showlines: true, size: 0.1 },
+    line: { width: 1.6, color: "rgba(0,0,0,0.38)" },
+  };
+}
+
 // ── Trace building ─────────────────────────────────────────────────────────────
 
 function makeCustomdata(r) {
@@ -265,6 +348,12 @@ function makePinnedTrace(r) {
 }
 
 function buildTraces(filtered) {
+  const traces = [];
+
+  // Terrain layer always renders first (bottom of stack)
+  const contour = makeContourTrace(terrainFeature);
+  if (contour) traces.push(contour);
+
   const isFocus = clickedIndices.length > 0;
 
   if (isFocus) {
@@ -273,7 +362,6 @@ function buildTraces(filtered) {
     const highlighted = filtered.filter(r =>  focusSet.has(r._idx) && !clickedSet.has(r._idx));
     const pinned      = clickedIndices.map(i => allRecords[i]);
 
-    const traces = [];
     if (dim.length) traces.push(makeTrace(dim, OTHER_COLOR, 0.22, true));
 
     // Render highlighted in their natural group colors
@@ -300,7 +388,6 @@ function buildTraces(filtered) {
       if (isFiltered ? isSel : isKnown) (colored[r.artist] = colored[r.artist] || []).push(r);
       else other.push(r);
     }
-    const traces = [];
     if (other.length) traces.push(makeTrace(other, OTHER_COLOR, OTHER_OPACITY, true));
     for (const [a, sub] of Object.entries(colored))
       traces.push(makeTrace(sub, artistColorMap[a], 0.88, false));
@@ -309,7 +396,6 @@ function buildTraces(filtered) {
 
   // Neighborhood mode
   const cids = [...new Set(filtered.map(r => r.artist_cluster))].sort((a, b) => a - b);
-  const traces = [];
   if (isFiltered) {
     const other = filtered.filter(r => r.artist_cluster !== selectedGroup);
     if (other.length) traces.push(makeTrace(other, OTHER_COLOR, OTHER_OPACITY, true));
@@ -429,6 +515,7 @@ function initHover() {
 
 function initClick() {
   document.getElementById("plot").on("plotly_click", function(data) {
+    if (window.matchMedia("(max-width: 640px)").matches) return;
     const idx = data.points[0].customdata.idx;
 
     if (clickedIndices.length === 1 && clickedIndices[0] === idx) {
@@ -555,6 +642,30 @@ document.getElementById("k-slider").addEventListener("input", function() {
   render();
 });
 
+// ── Terrain legend ────────────────────────────────────────────────────────────
+
+function updateTerrainLegend(featureKey) {
+  const legend = document.getElementById("terrain-legend");
+  if (!featureKey) { legend.classList.remove("visible"); return; }
+  const idx = FEATURE_KEYS.indexOf(featureKey);
+  document.getElementById("terrain-legend-label").textContent =
+    idx >= 0 ? FEATURE_LABELS[idx] : featureKey;
+  const gradient = TOPO_COLORSCALE
+    .map(([stop, color]) => `${color} ${(stop * 100).toFixed(0)}%`)
+    .join(", ");
+  document.getElementById("terrain-legend-bar").style.background =
+    `linear-gradient(to right, ${gradient})`;
+  legend.classList.add("visible");
+}
+
+// ── Terrain select ────────────────────────────────────────────────────────────
+
+document.getElementById("terrain-select").addEventListener("change", function() {
+  terrainFeature = this.value || null;
+  updateTerrainLegend(terrainFeature);
+  render();
+});
+
 // ── Info modal ────────────────────────────────────────────────────────────────
 
 document.getElementById("info-btn").addEventListener("click", () => {
@@ -573,6 +684,8 @@ fetch(DATA_PATH)
   .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
   .then(data => {
     applyData(data);
+    computeFeatureStats();
+    contourCache = {};
 
     const topArtists = rankArtists(allRecords, TOP_N_ARTISTS);
     topArtists.forEach((a, i) => artistColorMap[a] = ARTIST_PALETTE[i]);
@@ -582,6 +695,7 @@ fetch(DATA_PATH)
     document.getElementById("genre-btn").textContent = NEIGHBORHOOD_LABEL;
 
     document.getElementById("loading").style.display = "none";
+    if (hasFeatureData) document.getElementById("terrain-wrap").style.display = "block";
     buildSidebar();
     render();
   })
