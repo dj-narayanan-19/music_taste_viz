@@ -892,6 +892,13 @@ fetch(DATA_PATH)
     if (hasFeatureData) document.getElementById("terrain-wrap").style.display = "block";
     buildSidebar();
     buildFeatureSelector();
+    if (hasFeatureData && availableFeatures.size > 0) {
+      const keys = [...availableFeatures];
+      terrainFeature = keys[Math.floor(Math.random() * keys.length)];
+      const sel = document.getElementById("terrain-select");
+      if (sel) sel.value = terrainFeature;
+      updateTerrainLegend(terrainFeature);
+    }
     render();
     // Warm up umap-js in the background so first Recalculate is fast
     if (hasFeatureData) import("https://esm.sh/umap-js@1.3.3").then(m => { umapMod = m; }).catch(() => {});
