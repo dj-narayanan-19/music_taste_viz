@@ -43,7 +43,7 @@ const ARTIST_PALETTE = makeArtistPalette(TOP_N_ARTISTS);
 // ── State ─────────────────────────────────────────────────────────────────────
 
 let allRecords     = [];
-let colorMode      = "artist";
+let colorMode      = "genre";
 let selectedGroup  = null;
 let artistColorMap = {};
 let clusterLabels  = {};
@@ -52,7 +52,7 @@ let globalMinSize, globalMaxSize;
 let xRange, yRange;
 let tempoMin = 60, tempoMax = 200;
 let hasFeatureData = false;
-let currentK = 6;
+let currentK = 8;
 let inited = false;
 let terrainFeature  = null;
 let contourCache    = {};
@@ -724,10 +724,18 @@ document.getElementById("info-btn").addEventListener("click", () => {
 });
 document.getElementById("info-close").addEventListener("click", () => {
   document.getElementById("info-overlay").classList.remove("open");
+  localStorage.setItem("hasVisited", "1");
 });
 document.getElementById("info-overlay").addEventListener("click", function(e) {
-  if (e.target === this) this.classList.remove("open");
+  if (e.target === this) {
+    this.classList.remove("open");
+    localStorage.setItem("hasVisited", "1");
+  }
 });
+
+if (!localStorage.getItem("hasVisited")) {
+  document.getElementById("info-overlay").classList.add("open");
+}
 
 // ── Feature selector ─────────────────────────────────────────────────────────
 

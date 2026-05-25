@@ -237,6 +237,8 @@
                        letter-spacing: 0.07em; margin-bottom: 4px; }
     .info-section p  { font-size: 0.71rem; color: #444; line-height: 1.5; }
     .info-section a  { color: #1a1a2e; text-underline-offset: 2px; }
+    .info-section p + p { margin-top: 6px; }
+    .info-footer { font-size: 0.71rem; color: #444; line-height: 1.5; margin: 14px 0 16px; font-style: italic; }
     #info-close {
       display: block; margin-top: 16px; width: 100%; padding: 7px;
       background: #1a1a2e; color: #f7f5f0; border: none; border-radius: 5px;
@@ -327,35 +329,31 @@
       <h2>What am I looking at?</h2>
 
       <div class="info-section">
-        <h3>The map</h3>
-        <p>Every song is a bubble on the map positioned based on its sound qualities. Songs that sound alike are put near each other.</p>
+        <h3>The Map</h3>
+        <p>A UMAP of my music history. My most-listened songs are positioned in 2D space by audio feature similarity — songs that sound alike sit closer together. Bubble size = play count.</p>
       </div>
 
       <div class="info-section">
-        <h3>Bubble size</h3>
-        <p>Bigger = more plays.</p>
+        <h3>Data</h3>
+        <p>Listening history from Last.fm, audio features from SoundCharts (originally Spotify). Read about what the features mean <a href="https://developer.spotify.com/documentation/web-api/reference/get-audio-features" target="_blank" rel="noopener">here</a>. UMAP is a dimensionality reduction technique used to make the 10-feature space viewable in 2D.</p>
       </div>
 
       <div class="info-section">
-        <h3>Color modes</h3>
-        <p><strong>Artist</strong> — 50 artists with the most plays in the dataset are colored.<br>
-           <strong>Neighborhood</strong> — groups all songs into 6 broad sonic clusters. Click a cluster to see what connects them.</p>
+        <h3>Artist Neighborhoods</h3>
+        <p>Songs can be colored by artist or by neighborhood. Neighborhoods group artists whose mean song shares similar sound qualities — think genre-like clusters. The number of neighborhoods is adjustable. Click a neighborhood to highlight it and see its average audio features.</p>
       </div>
 
       <div class="info-section">
-        <h3>Feature bars</h3>
-        <p>Hover any song to see its audio fingerprint — 8 bars for acousticness, danceability, energy, and more. The faint tick marks the global average for each feature. <a href="https://developer.spotify.com/documentation/web-api/reference/get-audio-features" target="_blank" rel="noopener">What do these mean?</a></p>
+        <h3>Feature Selection</h3>
+        <p>Toggle which audio features are included in the UMAP calculation to see how each one affects the layout.</p>
       </div>
 
       <div class="info-section">
         <h3>Terrain</h3>
-        <p>Select a feature in the bottom left corner to color in a terrain feature map. Elevation coloring is based on a region's average score in that feature. A legend is in the bottom left.</p>
+        <p>Projects a topographic map onto the background based on a selected audio feature — high/low elevation = high/low values. Legend in the bottom left.</p>
       </div>
 
-      <div class="info-section">
-        <h3>Sonic neighbors</h3>
-        <p>Click any song to highlight its 15 most sonically similar neighbors. Click it again to clear.</p>
-      </div>
+      <p class="info-footer">Hover a point to see song details. Click to highlight its 15 nearest neighbors.</p>
 
       <button id="info-close">Got it</button>
     </div>
@@ -371,8 +369,8 @@
       <div>
         <div class="sl">Color by</div>
         <div class="mode-sw">
-          <button class="mode-btn active" data-mode="artist">Artist</button>
-          <button class="mode-btn" data-mode="genre" id="genre-btn">Neighborhood</button>
+          <button class="mode-btn" data-mode="artist">Artist</button>
+          <button class="mode-btn active" data-mode="genre" id="genre-btn">Neighborhood</button>
         </div>
       </div>
 
@@ -381,9 +379,9 @@
         <div class="group-list" id="group-list"></div>
       </div>
 
-      <div id="k-slider-wrap" style="display:none">
-        <div class="sl">Neighborhoods &nbsp;<span id="k-val">6</span></div>
-        <input type="range" id="k-slider" min="2" max="12" value="6" />
+      <div id="k-slider-wrap">
+        <div class="sl">Neighborhoods &nbsp;<span id="k-val">8</span></div>
+        <input type="range" id="k-slider" min="2" max="12" value="8" />
       </div>
 
       <div id="feature-wrap" style="display:none">
